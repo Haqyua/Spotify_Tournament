@@ -1,1 +1,231 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Spotify Tournament</title>
+</head>
+<body>
 
+<input id="playlistUrl" placeholder="Lien playlist Spotify">
+<button onclick="start()">Start</button>
+
+<div id="app"></div>
+
+<script>
+const CLIENT_ID = "22522b51012f4caeb90b48d7f2b881f9";
+const REDIRECT_URI = "https://haqyua.github.io/Spotify_Tournament/";
+
+let accessToken = null;
+
+let currentRound = [];
+let nextRound = [];
+let index = 0;
+
+// -------- PKCE --------
+async function generatePKCE() {
+  const array = new Uint8Array(32);
+  crypto.getRandomValues(array);
+
+  const verifier = btoa(String.fromCharCode(...array))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+  const encoder = new TextEncoder();
+  const data = encoder.encode(verifier);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+
+  const challenge = btoa(String.fromCharCode(...new Uint8Array(digest)))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+  return { verifier, challenge };
+}
+
+async function redirectToAuth() {
+  const { verifier, challenge } = await generatePKCE();
+  localStorage.setItem("verifier", verifier);
+
+  const url =
+    "https://accounts.spotify.com/authorize" +
+    "?client_id=" + CLIENT_ID +
+    "&response_type=code" +
+    "&redirect_uri=" + encodeURIComponent(REDIRECT_URI) +
+    "&code_challenge_method=S256" +
+    "&code_challenge=" + challenge +
+    "&scope=playlist-read-private";
+
+  window.location.href = url;
+}
+
+function getCode() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("code");
+}
+
+async function fetchAccessToken() {
+  const code = getCode();
+  if (!code) return null;
+
+  const verifier = localStorage.getItem("verifier");
+
+  const res = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body: new URLSearchParams({
+      client_id: CLIENT_ID,
+      grant_type: "authorization_code",
+      code: code,
+      redirect_uri: REDIRECT_URI,
+      code_verifier: verifier
+    })
+  });
+
+  const data = await res.json();
+
+  // nettoyer l’URL (retirer ?code=...)
+  window.history.replaceState({}, document.title, REDIRECT_URI);
+
+  return data.access_token;
+}
+
+// -------- PLAYLIST --------
+function getPlaylistId(url) {
+  return url.split("/playlist/")[1].split("?")[0];
+}
+
+async function getAllTracks(playlistId, token) {
+  let tracks = [];
+  let url = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100`;
+
+  while (url) {
+    let res = await fetch(url, {
+      headers: { Authorization: "Bearer " + token }
+    });
+
+    let data = await res.json();
+
+    tracks.push(...data.items.map(i => i.track).filter(t => t));
+    url = data.next;
+  }
+
+  return tracks;
+}
+
+// -------- SHUFFLE --------
+function shuffle(array) {
+  for (let i = array.length - 1; i > 0; i--) {
+    let j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+}
+
+// -------- SAVE --------
+function saveState() {
+  localStorage.setItem("tournament", JSON.stringify({
+    currentRound,
+    nextRound,
+    index
+  }));
+}
+
+function loadState() {
+  const data = localStorage.getItem("tournament");
+  if (!data) return false;
+
+  const parsed = JSON.parse(data);
+  currentRound = parsed.currentRound;
+  nextRound = parsed.nextRound;
+  index = parsed.index;
+  return true;
+}
+
+// -------- UI --------
+function renderTrack(t, side) {
+  return `
+    <div style="width:45%;display:inline-block;text-align:center">
+      <img src="${t.album.images[0]?.url}" width="150"><br>
+      <b>${t.name}</b><br>
+      ${t.artists.map(a => a.name).join(", ")}<br>
+      <button onclick="vote(${side})">Choisir</button>
+    </div>
+  `;
+}
+
+function showMatch() {
+  if (index >= currentRound.length) {
+    if (nextRound.length === 1) {
+      localStorage.removeItem("tournament");
+      document.getElementById("app").innerHTML =
+        "<h2>Gagnant :</h2>" +
+        renderTrack(nextRound[0], 0);
+      return;
+    }
+    currentRound = nextRound;
+    nextRound = [];
+    index = 0;
+  }
+
+  let a = currentRound[index];
+  let b = currentRound[index + 1];
+
+  if (!b) {
+    nextRound.push(a);
+    index += 2;
+    saveState();
+    showMatch();
+    return;
+  }
+
+  document.getElementById("app").innerHTML =
+    renderTrack(a, 0) + renderTrack(b, 1);
+
+  saveState();
+}
+
+// -------- VOTE --------
+function vote(choice) {
+  nextRound.push(currentRound[index + choice]);
+  index += 2;
+  showMatch();
+}
+
+// -------- START --------
+async function start() {
+  if (!accessToken) {
+    accessToken = await fetchAccessToken();
+  }
+
+  if (!accessToken) {
+    await redirectToAuth();
+    return;
+  }
+
+  const url = document.getElementById("playlistUrl").value;
+  const id = getPlaylistId(url);
+
+  let tracks = await getAllTracks(id, accessToken);
+
+  tracks = tracks.filter(t => t && t.name);
+
+  shuffle(tracks);
+
+  currentRound = tracks;
+  nextRound = [];
+  index = 0;
+
+  saveState();
+  showMatch();
+}
+
+// -------- AUTO LOAD --------
+window.onload = async () => {
+  accessToken = await fetchAccessToken();
+
+  if (loadState()) {
+    showMatch();
+  }
+};
+</script>
+
+</body>
+</html>
