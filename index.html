@@ -21,6 +21,7 @@
     <button onclick="start()" style="padding: 10px 16px; font-size: 16px;">Start</button>
     <button onclick="undoLastSelection()" id="undoButton" style="padding: 10px 16px; font-size: 16px; margin-left: 8px;">Undo</button>
     <button onclick="resetTournament()" style="padding: 10px 16px; font-size: 16px; margin-left: 8px;">Reset</button>
+    <button onclick="reconnectSpotify()" style="padding: 10px 16px; font-size: 16px; margin-left: 8px;">Reconnect Spotify</button>
   </div>
 
   <div id="status" style="margin-bottom: 16px;"></div>
@@ -34,7 +35,6 @@ const STORAGE_KEYS = {
   verifier: "spotify_pkce_verifier",
   playlistUrl: "spotify_playlist_url",
   pendingStart: "spotify_pending_start",
-  accessToken: "spotify_access_token",
   tournament: "spotify_tournament_state"
 };
 
@@ -66,11 +66,6 @@ function escapeHtml(str) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
-}
-
-function clearExpiredToken() {
-  accessToken = null;
-  localStorage.removeItem(STORAGE_KEYS.accessToken);
 }
 
 function savePlaylistUrl() {
@@ -164,6 +159,12 @@ async function redirectToAuth() {
   window.location.href = authUrl.toString();
 }
 
+function reconnectSpotify() {
+  savePendingStart(true);
+  savePlaylistUrl();
+  redirectToAuth();
+}
+
 function getCode() {
   return new URLSearchParams(window.location.search).get("code");
 }
@@ -216,9 +217,7 @@ async function fetchAccessToken() {
     throw new Error(data.error_description || data.error || "Échec de récupération du token.");
   }
 
-  localStorage.setItem(STORAGE_KEYS.accessToken, data.access_token);
   window.history.replaceState({}, document.title, REDIRECT_URI);
-
   return data.access_token;
 }
 
@@ -230,10 +229,7 @@ function getPlaylistId(url) {
 
 async function spotifyApiFetch(url) {
   if (!accessToken) {
-    const savedToken = localStorage.getItem(STORAGE_KEYS.accessToken);
-    if (savedToken) {
-      accessToken = savedToken;
-    }
+    throw new Error("NOT_AUTHENTICATED");
   }
 
   const res = await fetch(url, {
@@ -252,7 +248,7 @@ async function spotifyApiFetch(url) {
       message.toLowerCase().includes("token expired") ||
       message.toLowerCase().includes("access token expired")
     ) {
-      clearExpiredToken();
+      accessToken = null;
       throw new Error("TOKEN_EXPIRED");
     }
 
@@ -546,7 +542,7 @@ function resetTournament() {
 
   clearState();
   clearPendingStart();
-  clearExpiredToken();
+  accessToken = null;
   currentRound = [];
   nextRound = [];
   index = 0;
@@ -620,9 +616,10 @@ async function start() {
   } catch (error) {
     console.error(error);
 
-    if (error.message === "TOKEN_EXPIRED") {
-      setStatus("Session expirée, reconnexion Spotify...");
+    if (error.message === "TOKEN_EXPIRED" || error.message === "NOT_AUTHENTICATED") {
+      setStatus("Session Spotify expirée, reconnexion...");
       savePendingStart(true);
+      savePlaylistUrl();
       await redirectToAuth();
       return;
     }
@@ -635,11 +632,6 @@ async function start() {
 window.onload = async () => {
   try {
     restorePlaylistUrl();
-
-    const savedToken = localStorage.getItem(STORAGE_KEYS.accessToken);
-    if (savedToken) {
-      accessToken = savedToken;
-    }
 
     const code = getCode();
     if (code) {
