@@ -24,21 +24,11 @@
         <button onclick="toggleQualified()" id="toggleQualifiedButton" style="padding:12px 16px; font-size:16px; border:none; border-radius:10px; background:#e5e7eb; cursor:pointer;">Masquer qualifiés</button>
       </div>
 
-      <div style="margin-top:16px; display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
-        <div style="display:flex; align-items:center; gap:8px;">
-          <label for="volumeSlider"><b>Volume preview</b></label>
-          <input id="volumeSlider" type="range" min="0" max="100" value="60" oninput="updateVolume(this.value)" />
-          <span id="volumeLabel">60%</span>
-        </div>
-
-        <div style="font-size:14px; color:#4b5563;">
-          Raccourcis :
-          <b>←</b> gauche,
-          <b>→</b> droite,
-          <b>Z</b> undo,
-          <b>Space</b> play/pause gauche,
-          <b>Entrée</b> play/pause droite
-        </div>
+      <div style="margin-top:16px; font-size:14px; color:#4b5563;">
+        Raccourcis :
+        <b>←</b> gauche,
+        <b>→</b> droite,
+        <b>Z</b> undo
       </div>
     </div>
 
@@ -101,12 +91,9 @@ const state = {
   lastUndoSnapshot: null,
   byeTimeout: null,
   totalTracks: 0,
-  volume: 0.6,
   qualifiedVisible: true,
   currentLeftTrack: null,
-  currentRightTrack: null,
-  currentAudioTrackId: null,
-  audio: new Audio()
+  currentRightTrack: null
 };
 
 // -------- DOM --------
@@ -182,7 +169,6 @@ function simplifyTrack(track) {
     external_urls: {
       spotify: track.external_urls?.spotify || "#"
     },
-    preview_url: track.preview_url || null,
     type: "track"
   };
 }
@@ -394,58 +380,6 @@ async function getAllTracks(playlistId) {
   return { tracks, total };
 }
 
-// -------- AUDIO --------
-state.audio.volume = state.volume;
-
-function updateVolume(value) {
-  state.volume = Number(value) / 100;
-  state.audio.volume = state.volume;
-  $("volumeLabel").textContent = `${value}%`;
-}
-
-function stopAudio() {
-  state.audio.pause();
-  state.audio.currentTime = 0;
-  state.currentAudioTrackId = null;
-  refreshPlayButtons();
-}
-
-function togglePreview(track) {
-  if (!track || !track.preview_url) return;
-
-  if (state.currentAudioTrackId === track.id && !state.audio.paused) {
-    state.audio.pause();
-    refreshPlayButtons();
-    return;
-  }
-
-  if (state.currentAudioTrackId !== track.id) {
-    state.audio.src = track.preview_url;
-    state.currentAudioTrackId = track.id;
-  }
-
-  state.audio.volume = state.volume;
-  state.audio.play().catch(() => {});
-  refreshPlayButtons();
-}
-
-state.audio.addEventListener("ended", () => {
-  state.currentAudioTrackId = null;
-  refreshPlayButtons();
-});
-
-function refreshPlayButtons() {
-  const buttons = document.querySelectorAll("[data-play-track-id]");
-  buttons.forEach(button => {
-    const trackId = button.getAttribute("data-play-track-id");
-    if (trackId && trackId === state.currentAudioTrackId && !state.audio.paused) {
-      button.textContent = "Pause";
-    } else {
-      button.textContent = "Play";
-    }
-  });
-}
-
 // -------- TOURNAMENT --------
 function resetTournamentData() {
   state.currentRound = [];
@@ -499,7 +433,6 @@ function undoLastSelection() {
 
 function vote(choice) {
   stopByeTimeout();
-  stopAudio();
 
   state.lastUndoSnapshot = createUndoSnapshot();
   updateUndoButton();
@@ -513,7 +446,6 @@ function vote(choice) {
 
 function resetTournament() {
   stopByeTimeout();
-  stopAudio();
   clearTournament();
   clearPendingStart();
   state.accessToken = null;
@@ -535,7 +467,6 @@ function renderTrack(track, side) {
   const imageUrl = track.album?.images?.[0]?.url || "";
   const artists = getArtistNames(track);
   const spotifyUrl = track.external_urls?.spotify || "#";
-  const hasPreview = !!track.preview_url;
 
   return `
     <div style="
@@ -555,15 +486,6 @@ function renderTrack(track, side) {
 
       <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
         <button onclick="vote(${side})" style="padding:12px 18px; font-size:16px; border:none; border-radius:10px; background:#111827; color:#fff; cursor:pointer;">Choisir</button>
-        <button
-          ${hasPreview ? `onclick="togglePreviewById('${track.id}')"` : "disabled"}
-          data-play-track-id="${escapeHtml(track.id)}"
-          style="padding:12px 18px; font-size:16px; border:none; border-radius:10px; background:${hasPreview ? "#e5e7eb" : "#f3f4f6"}; color:${hasPreview ? "#111827" : "#9ca3af"}; cursor:${hasPreview ? "pointer" : "not-allowed"};"
-        >Play</button>
-      </div>
-
-      <div style="font-size:13px; color:#6b7280;">
-        ${hasPreview ? "Preview disponible" : "Pas de preview"}
       </div>
     </div>
   `;
@@ -657,7 +579,6 @@ function showWinner(track) {
       </div>
     </div>
   `);
-  refreshPlayButtons();
 }
 
 function showMatch() {
@@ -733,14 +654,12 @@ function showMatch() {
   `);
 
   saveTournament();
-  refreshPlayButtons();
 }
 
 // -------- FLOW --------
 async function start() {
   try {
     stopByeTimeout();
-    stopAudio();
     setStatus("Chargement...");
 
     const playlistUrl = $("playlistUrl").value.trim();
@@ -799,7 +718,6 @@ async function init() {
     restorePlaylistUrl();
     loadQualifiedVisibility();
     renderQualifiedPanelState();
-    updateVolume(60);
 
     const code = getQueryParam("code");
     if (code) {
@@ -828,12 +746,6 @@ async function init() {
   }
 }
 
-window.togglePreviewById = function(trackId) {
-  const track = [state.currentLeftTrack, state.currentRightTrack, state.roundByeTrack]
-    .find(t => t && t.id === trackId);
-  if (track) togglePreview(track);
-};
-
 window.onload = init;
 
 // -------- KEYBOARD --------
@@ -855,16 +767,6 @@ document.addEventListener("keydown", (event) => {
   if (event.key.toLowerCase() === "z") {
     event.preventDefault();
     undoLastSelection();
-  }
-
-  if (event.code === "Space" && state.currentLeftTrack) {
-    event.preventDefault();
-    togglePreview(state.currentLeftTrack);
-  }
-
-  if (event.key === "Enter" && state.currentRightTrack) {
-    event.preventDefault();
-    togglePreview(state.currentRightTrack);
   }
 });
 </script>
