@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Playlist Tournament</title>
 </head>
-<body style="font-family: Arial, sans-serif; max-width: 1000px; margin: 30px auto; padding: 0 16px;">
+<body style="font-family: Arial, sans-serif; max-width: 1100px; margin: 30px auto; padding: 0 16px;">
 
   <h1>Playlist Tournament</h1>
 
@@ -41,6 +41,7 @@ let accessToken = null;
 let currentRound = [];
 let nextRound = [];
 let index = 0;
+let byeTimeout = null;
 
 function setStatus(message) {
   document.getElementById("status").innerHTML = `<p>${escapeHtml(message)}</p>`;
@@ -323,6 +324,33 @@ function renderTrack(t, side) {
   `;
 }
 
+function renderBye(track) {
+  const imageUrl = track.album?.images?.[0]?.url || "";
+  const artists = (track.artists || []).map(a => a.name).join(", ") || "Artiste inconnu";
+
+  return `
+    <div style="
+      width: 18%;
+      min-width: 140px;
+      display: inline-block;
+      vertical-align: top;
+      text-align: center;
+      opacity: 0.75;
+      font-size: 12px;
+      border: 1px dashed #bbb;
+      border-radius: 10px;
+      padding: 10px;
+      margin: 8px 12px 8px 0;
+      box-sizing: border-box;
+    ">
+      <div style="font-size:11px; font-weight:bold; margin-bottom:8px;">BYE DU TOUR</div>
+      ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(track.name)}" width="70" style="border-radius:6px;"><br><br>` : ""}
+      <div style="font-weight:bold; margin-bottom:4px;">${escapeHtml(track.name)}</div>
+      <div>${escapeHtml(artists)}</div>
+    </div>
+  `;
+}
+
 function showWinner(track) {
   clearStatus();
   document.getElementById("app").innerHTML = `
@@ -334,6 +362,11 @@ function showWinner(track) {
 }
 
 function showMatch() {
+  if (byeTimeout) {
+    clearTimeout(byeTimeout);
+    byeTimeout = null;
+  }
+
   if (index >= currentRound.length) {
     if (nextRound.length === 1) {
       const winner = nextRound[0];
@@ -349,20 +382,49 @@ function showMatch() {
 
   const a = currentRound[index];
   const b = currentRound[index + 1];
+  const upcomingBye = currentRound.length % 2 === 1 ? currentRound[currentRound.length - 1] : null;
+  const isCurrentBye = !b;
 
-  if (!b) {
+  if (isCurrentBye) {
+    clearStatus();
+    document.getElementById("app").innerHTML = `
+      <div style="display:flex; align-items:flex-start; gap:12px;">
+        ${renderBye(a)}
+        <div style="
+          flex:1;
+          border:1px solid #ddd;
+          border-radius:12px;
+          padding:20px;
+          margin-top:8px;
+        ">
+          <p style="margin:0; font-size:18px;"><b>${escapeHtml(a.name)}</b> passe automatiquement au tour suivant.</p>
+        </div>
+      </div>
+    `;
+
     nextRound.push(a);
     index += 2;
     saveState();
-    showMatch();
+
+    byeTimeout = setTimeout(() => {
+      showMatch();
+    }, 1200);
+
     return;
   }
 
   clearStatus();
   document.getElementById("app").innerHTML = `
-    <p><b>Match ${Math.floor(index / 2) + 1}</b></p>
-    ${renderTrack(a, 0)}
-    ${renderTrack(b, 1)}
+    <div style="display:flex; align-items:flex-start; gap:12px;">
+      <div style="width:18%; min-width:140px;">
+        ${upcomingBye ? renderBye(upcomingBye) : ""}
+      </div>
+      <div style="flex:1;">
+        <p><b>Match ${Math.floor(index / 2) + 1}</b></p>
+        ${renderTrack(a, 0)}
+        ${renderTrack(b, 1)}
+      </div>
+    </div>
   `;
 
   saveState();
@@ -370,6 +432,11 @@ function showMatch() {
 
 // -------- VOTE --------
 function vote(choice) {
+  if (byeTimeout) {
+    clearTimeout(byeTimeout);
+    byeTimeout = null;
+  }
+
   nextRound.push(currentRound[index + choice]);
   index += 2;
   showMatch();
@@ -377,6 +444,11 @@ function vote(choice) {
 
 // -------- RESET --------
 function resetTournament() {
+  if (byeTimeout) {
+    clearTimeout(byeTimeout);
+    byeTimeout = null;
+  }
+
   clearState();
   clearPendingStart();
   currentRound = [];
@@ -389,6 +461,11 @@ function resetTournament() {
 // -------- START --------
 async function start() {
   try {
+    if (byeTimeout) {
+      clearTimeout(byeTimeout);
+      byeTimeout = null;
+    }
+
     setStatus("Chargement...");
 
     if (!CLIENT_ID) {
