@@ -47,7 +47,7 @@ function setStatus(message) {
 }
 
 function setError(message) {
-  document.getElementById("status").innerHTML = `<p style="color: #b00020;"><b>Erreur :</b> ${escapeHtml(message)}</p>`;
+  document.getElementById("status").innerHTML = `<p style="color:#b00020;"><b>Erreur :</b> ${escapeHtml(message)}</p>`;
 }
 
 function clearStatus() {
@@ -210,11 +210,29 @@ function getPlaylistId(url) {
   return match ? match[1] : null;
 }
 
+async function getPlaylistMeta(playlistId, token) {
+  const url = `https://api.spotify.com/v1/playlists/${playlistId}?fields=name,tracks(total),owner(display_name,id),public,collaborative`;
+  const res = await fetch(url, {
+    headers: { Authorization: "Bearer " + token }
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    throw new Error(data.error?.message || "Impossible de lire les infos de playlist");
+  }
+
+  return data;
+}
+
 async function getAllTracks(playlistId, token) {
   let tracks = [];
-  let url = `https://api.spotify.com/v1/playlists/${playlistId}/items?limit=100`;
+  let offset = 0;
+  let total = null;
 
-  while (url) {
+  while (true) {
+    const url = `https://api.spotify.com/v1/playlists/${playlistId}/items?limit=50&offset=${offset}&additional_types=track`;
+
     const res = await fetch(url, {
       headers: {
         Authorization: "Bearer " + token
@@ -227,15 +245,24 @@ async function getAllTracks(playlistId, token) {
       throw new Error(data.error?.message || "Erreur API Spotify");
     }
 
+    if (total === null) {
+      total = data.total ?? 0;
+    }
+
     const batch = (data.items || [])
       .map(item => item.track)
-      .filter(track => track && track.type === "track");
+      .filter(track => track && track.type === "track" && track.name);
 
     tracks.push(...batch);
-    url = data.next;
+
+    if (!data.next) {
+      break;
+    }
+
+    offset += 50;
   }
 
-  return tracks;
+  return { tracks, total };
 }
 
 // -------- SHUFFLE --------
@@ -288,10 +315,10 @@ function renderTrack(t, side) {
       margin: 8px;
       box-sizing: border-box;
     ">
-      ${imageUrl ? `<a href="${spotifyUrl}" target="_blank" rel="noopener noreferrer"><img src="${imageUrl}" alt="${escapeHtml(t.name)}" width="180" style="border-radius: 8px;"></a><br><br>` : ""}
-      <div style="font-size: 18px; font-weight: bold; margin-bottom: 8px;">${escapeHtml(t.name)}</div>
-      <div style="margin-bottom: 14px;">${escapeHtml(artists)}</div>
-      <button onclick="vote(${side})" style="padding: 10px 16px; font-size: 16px;">Choisir</button>
+      ${imageUrl ? `<a href="${spotifyUrl}" target="_blank" rel="noopener noreferrer"><img src="${imageUrl}" alt="${escapeHtml(t.name)}" width="180" style="border-radius:8px;"></a><br><br>` : ""}
+      <div style="font-size:18px; font-weight:bold; margin-bottom:8px;">${escapeHtml(t.name)}</div>
+      <div style="margin-bottom:14px;">${escapeHtml(artists)}</div>
+      <button onclick="vote(${side})" style="padding:10px 16px; font-size:16px;">Choisir</button>
     </div>
   `;
 }
@@ -391,11 +418,14 @@ async function start() {
       return;
     }
 
-    const tracks = (await getAllTracks(playlistId, accessToken))
-      .filter(t => t && t.name);
+    const meta = await getPlaylistMeta(playlistId, accessToken);
+    setStatus(`Lecture de la playlist "${meta.name}"... ${meta.tracks?.total ?? 0} éléments annoncés.`);
+
+    const result = await getAllTracks(playlistId, accessToken);
+    const tracks = result.tracks;
 
     if (tracks.length === 0) {
-      throw new Error("Aucune musique trouvée dans cette playlist.");
+      throw new Error(`Aucune musique trouvée. Spotify annonce ${result.total ?? 0} items, mais 0 piste exploitable a été récupérée.`);
     }
 
     shuffle(tracks);
