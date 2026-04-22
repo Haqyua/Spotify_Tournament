@@ -6,20 +6,23 @@
 </head>
 <body>
 
-<input id="playlistUrl" placeholder="Lien playlist Spotify">
+<input id="playlistUrl" placeholder="Lien playlist Spotify" style="width: 400px;">
 <button onclick="start()">Start</button>
 
-<div id="app"></div>
+<div id="app" style="margin-top: 20px;"></div>
 
 <script>
-const CLIENT_ID = "22522b51012f4caeb90b48d7f2b881f9";
+const CLIENT_ID = "TON_CLIENT_ID_SPOTIFY";
 const REDIRECT_URI = "https://haqyua.github.io/Spotify_Tournament/";
 
 let accessToken = null;
-
 let currentRound = [];
 let nextRound = [];
 let index = 0;
+
+function setMessage(message) {
+  document.getElementById("app").innerHTML = `<p>${message}</p>`;
+}
 
 // -------- PKCE --------
 async function generatePKCE() {
@@ -27,14 +30,18 @@ async function generatePKCE() {
   crypto.getRandomValues(array);
 
   const verifier = btoa(String.fromCharCode(...array))
-    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 
   const encoder = new TextEncoder();
   const data = encoder.encode(verifier);
   const digest = await crypto.subtle.digest("SHA-256", data);
 
   const challenge = btoa(String.fromCharCode(...new Uint8Array(digest)))
-    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 
   return { verifier, challenge };
 }
@@ -45,12 +52,12 @@ async function redirectToAuth() {
 
   const url =
     "https://accounts.spotify.com/authorize" +
-    "?client_id=" + CLIENT_ID +
+    "?client_id=" + encodeURIComponent(CLIENT_ID) +
     "&response_type=code" +
     "&redirect_uri=" + encodeURIComponent(REDIRECT_URI) +
     "&code_challenge_method=S256" +
-    "&code_challenge=" + challenge +
-    "&scope=playlist-read-private";
+    "&code_challenge=" + encodeURIComponent(challenge) +
+    "&scope=" + encodeURIComponent("playlist-read-private playlist-read-collaborative");
 
   window.location.href = url;
 }
@@ -65,6 +72,10 @@ async function fetchAccessToken() {
   if (!code) return null;
 
   const verifier = localStorage.getItem("verifier");
+  if (!verifier) {
+    setMessage("Code PKCE manquant.");
+    return null;
+  }
 
   const res = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
@@ -82,15 +93,20 @@ async function fetchAccessToken() {
 
   const data = await res.json();
 
-  // nettoyer l’URL (retirer ?code=...)
-  window.history.replaceState({}, document.title, REDIRECT_URI);
+  if (!res.ok) {
+    console.error("Erreur token :", data);
+    setMessage("Erreur lors de la récupération du token Spotify.");
+    return null;
+  }
 
+  window.history.replaceState({}, document.title, REDIRECT_URI);
   return data.access_token;
 }
 
 // -------- PLAYLIST --------
 function getPlaylistId(url) {
-  return url.split("/playlist/")[1].split("?")[0];
+  const match = url.match(/playlist\/([a-zA-Z0-9]+)/);
+  return match ? match[1] : null;
 }
 
 async function getAllTracks(playlistId, token) {
@@ -98,11 +114,16 @@ async function getAllTracks(playlistId, token) {
   let url = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100`;
 
   while (url) {
-    let res = await fetch(url, {
+    const res = await fetch(url, {
       headers: { Authorization: "Bearer " + token }
     });
 
-    let data = await res.json();
+    const data = await res.json();
+
+    if (!res.ok) {
+      console.error("Erreur playlist :", data);
+      throw new Error(data.error?.message || "Erreur API Spotify");
+    }
 
     tracks.push(...data.items.map(i => i.track).filter(t => t));
     url = data.next;
@@ -114,7 +135,7 @@ async function getAllTracks(playlistId, token) {
 // -------- SHUFFLE --------
 function shuffle(array) {
   for (let i = array.length - 1; i > 0; i--) {
-    let j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(Math.random() * (i + 1));
     [array[i], array[j]] = [array[j], array[i]];
   }
 }
@@ -141,11 +162,14 @@ function loadState() {
 
 // -------- UI --------
 function renderTrack(t, side) {
+  const imageUrl = t.album?.images?.[0]?.url || "";
+  const artists = t.artists?.map(a => a.name).join(", ") || "Artiste inconnu";
+
   return `
-    <div style="width:45%;display:inline-block;text-align:center">
-      <img src="${t.album.images[0]?.url}" width="150"><br>
+    <div style="width:45%;display:inline-block;text-align:center;vertical-align:top;padding:10px;">
+      ${imageUrl ? `<img src="${imageUrl}" width="150"><br>` : ""}
       <b>${t.name}</b><br>
-      ${t.artists.map(a => a.name).join(", ")}<br>
+      ${artists}<br><br>
       <button onclick="vote(${side})">Choisir</button>
     </div>
   `;
@@ -156,17 +180,17 @@ function showMatch() {
     if (nextRound.length === 1) {
       localStorage.removeItem("tournament");
       document.getElementById("app").innerHTML =
-        "<h2>Gagnant :</h2>" +
-        renderTrack(nextRound[0], 0);
+        "<h2>Gagnant :</h2>" + renderTrack(nextRound[0], 0);
       return;
     }
+
     currentRound = nextRound;
     nextRound = [];
     index = 0;
   }
 
-  let a = currentRound[index];
-  let b = currentRound[index + 1];
+  const a = currentRound[index];
+  const b = currentRound[index + 1];
 
   if (!b) {
     nextRound.push(a);
@@ -177,7 +201,9 @@ function showMatch() {
   }
 
   document.getElementById("app").innerHTML =
-    renderTrack(a, 0) + renderTrack(b, 1);
+    `<p>Match ${Math.floor(index / 2) + 1}</p>` +
+    renderTrack(a, 0) +
+    renderTrack(b, 1);
 
   saveState();
 }
@@ -191,38 +217,69 @@ function vote(choice) {
 
 // -------- START --------
 async function start() {
-  if (!accessToken) {
-    accessToken = await fetchAccessToken();
+  try {
+    setMessage("Chargement...");
+
+    if (!CLIENT_ID) {
+      setMessage("CLIENT_ID manquant.");
+      return;
+    }
+
+    if (!REDIRECT_URI) {
+      setMessage("REDIRECT_URI manquant.");
+      return;
+    }
+
+    if (!accessToken) {
+      accessToken = await fetchAccessToken();
+    }
+
+    if (!accessToken) {
+      await redirectToAuth();
+      return;
+    }
+
+    const url = document.getElementById("playlistUrl").value.trim();
+    const id = getPlaylistId(url);
+
+    if (!id) {
+      setMessage("Lien de playlist invalide.");
+      return;
+    }
+
+    let tracks = await getAllTracks(id, accessToken);
+    tracks = tracks.filter(t => t && t.name);
+
+    if (tracks.length === 0) {
+      setMessage("Aucune musique trouvée dans cette playlist.");
+      return;
+    }
+
+    shuffle(tracks);
+
+    currentRound = tracks;
+    nextRound = [];
+    index = 0;
+
+    saveState();
+    showMatch();
+  } catch (error) {
+    console.error(error);
+    setMessage("Erreur : " + error.message);
   }
-
-  if (!accessToken) {
-    await redirectToAuth();
-    return;
-  }
-
-  const url = document.getElementById("playlistUrl").value;
-  const id = getPlaylistId(url);
-
-  let tracks = await getAllTracks(id, accessToken);
-
-  tracks = tracks.filter(t => t && t.name);
-
-  shuffle(tracks);
-
-  currentRound = tracks;
-  nextRound = [];
-  index = 0;
-
-  saveState();
-  showMatch();
 }
 
 // -------- AUTO LOAD --------
 window.onload = async () => {
-  accessToken = await fetchAccessToken();
+  try {
+    accessToken = await fetchAccessToken();
 
-  if (loadState()) {
-    showMatch();
+    if (loadState()) {
+      showMatch();
+    }
+  } catch (error) {
+    console.error(error);
+    setMessage("Erreur au chargement : " + error.message);
   }
 };
 </script>
