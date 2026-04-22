@@ -45,7 +45,7 @@ let index = 0;
 let byeTimeout = null;
 let roundByeTrack = null;
 let roundNumber = 1;
-let historyStack = [];
+let lastUndoSnapshot = null;
 
 function setStatus(message) {
   document.getElementById("status").innerHTML = `<p>${escapeHtml(message)}</p>`;
@@ -95,9 +95,9 @@ function clearPendingStart() {
 function updateUndoButton() {
   const button = document.getElementById("undoButton");
   if (!button) return;
-  button.disabled = historyStack.length === 0;
-  button.style.opacity = historyStack.length === 0 ? "0.5" : "1";
-  button.style.cursor = historyStack.length === 0 ? "not-allowed" : "pointer";
+  button.disabled = !lastUndoSnapshot;
+  button.style.opacity = lastUndoSnapshot ? "1" : "0.5";
+  button.style.cursor = lastUndoSnapshot ? "pointer" : "not-allowed";
 }
 
 // -------- PKCE --------
@@ -227,6 +227,21 @@ function getPlaylistId(url) {
   return match ? match[1] : null;
 }
 
+function simplifyTrack(track) {
+  return {
+    id: track.id || "",
+    name: track.name || "Titre inconnu",
+    artists: (track.artists || []).map(a => ({ name: a.name || "Artiste inconnu" })),
+    album: {
+      images: track.album?.images?.[0]?.url ? [{ url: track.album.images[0].url }] : []
+    },
+    external_urls: {
+      spotify: track.external_urls?.spotify || "#"
+    },
+    type: "track"
+  };
+}
+
 async function spotifyApiFetch(url) {
   if (!accessToken) {
     throw new Error("NOT_AUTHENTICATED");
@@ -278,7 +293,8 @@ async function getAllTracks(playlistId) {
 
     const batch = (data.items || [])
       .map(entry => entry.item || entry.track)
-      .filter(track => track && track.type === "track" && track.name);
+      .filter(track => track && track.type === "track" && track.name)
+      .map(simplifyTrack);
 
     tracks.push(...batch);
 
@@ -306,22 +322,20 @@ function prepareRound() {
   if (currentRound.length > 1 && currentRound.length % 2 === 1) {
     const byeIndex = Math.floor(Math.random() * currentRound.length);
     roundByeTrack = currentRound[byeIndex];
-
     currentRound.splice(byeIndex, 1);
     currentRound.push(roundByeTrack);
   }
 }
 
-// -------- HISTORY --------
-function pushHistorySnapshot() {
-  historyStack.push({
+// -------- UNDO --------
+function createUndoSnapshot() {
+  return {
     currentRound: [...currentRound],
     nextRound: [...nextRound],
     index,
     roundNumber,
     roundByeTrack
-  });
-  updateUndoButton();
+  };
 }
 
 function undoLastSelection() {
@@ -330,16 +344,16 @@ function undoLastSelection() {
     byeTimeout = null;
   }
 
-  if (historyStack.length === 0) {
+  if (!lastUndoSnapshot) {
     return;
   }
 
-  const snapshot = historyStack.pop();
-  currentRound = [...snapshot.currentRound];
-  nextRound = [...snapshot.nextRound];
-  index = snapshot.index;
-  roundNumber = snapshot.roundNumber;
-  roundByeTrack = snapshot.roundByeTrack || null;
+  currentRound = [...lastUndoSnapshot.currentRound];
+  nextRound = [...lastUndoSnapshot.nextRound];
+  index = lastUndoSnapshot.index;
+  roundNumber = lastUndoSnapshot.roundNumber;
+  roundByeTrack = lastUndoSnapshot.roundByeTrack || null;
+  lastUndoSnapshot = null;
 
   saveState();
   updateUndoButton();
@@ -348,14 +362,18 @@ function undoLastSelection() {
 
 // -------- SAVE / LOAD --------
 function saveState() {
-  localStorage.setItem(STORAGE_KEYS.tournament, JSON.stringify({
-    currentRound,
-    nextRound,
-    index,
-    roundNumber,
-    roundByeTrack,
-    historyStack
-  }));
+  try {
+    localStorage.setItem(STORAGE_KEYS.tournament, JSON.stringify({
+      currentRound,
+      nextRound,
+      index,
+      roundNumber,
+      roundByeTrack
+    }));
+  } catch (error) {
+    console.error("Erreur sauvegarde localStorage :", error);
+    setStatus("Sauvegarde locale désactivée pour cette playlist trop volumineuse.");
+  }
 }
 
 function loadState() {
@@ -368,7 +386,7 @@ function loadState() {
   index = parsed.index || 0;
   roundNumber = parsed.roundNumber || 1;
   roundByeTrack = parsed.roundByeTrack || null;
-  historyStack = parsed.historyStack || [];
+  lastUndoSnapshot = null;
 
   updateUndoButton();
 
@@ -454,7 +472,7 @@ function showMatch() {
     if (nextRound.length === 1) {
       const winner = nextRound[0];
       clearState();
-      historyStack = [];
+      lastUndoSnapshot = null;
       updateUndoButton();
       showWinner(winner);
       return;
@@ -525,7 +543,9 @@ function vote(choice) {
     byeTimeout = null;
   }
 
-  pushHistorySnapshot();
+  lastUndoSnapshot = createUndoSnapshot();
+  updateUndoButton();
+
   nextRound.push(currentRound[index + choice]);
   index += 2;
 
@@ -548,7 +568,7 @@ function resetTournament() {
   index = 0;
   roundByeTrack = null;
   roundNumber = 1;
-  historyStack = [];
+  lastUndoSnapshot = null;
   updateUndoButton();
   document.getElementById("app").innerHTML = "";
   setStatus("Tournoi réinitialisé.");
@@ -607,7 +627,7 @@ async function start() {
     nextRound = [];
     index = 0;
     roundNumber = 1;
-    historyStack = [];
+    lastUndoSnapshot = null;
     prepareRound();
 
     saveState();
