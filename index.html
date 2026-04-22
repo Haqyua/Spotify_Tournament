@@ -434,10 +434,6 @@ state.audio.addEventListener("ended", () => {
   refreshPlayButtons();
 });
 
-function isTrackPlaying(track) {
-  return !!track && state.currentAudioTrackId === track.id && !state.audio.paused;
-}
-
 function refreshPlayButtons() {
   const buttons = document.querySelectorAll("[data-play-track-id]");
   buttons.forEach(button => {
@@ -543,16 +539,13 @@ function renderTrack(track, side) {
 
   return `
     <div style="
-      width:calc(50% - 12px);
+      flex:1;
       min-width:280px;
-      display:inline-block;
-      vertical-align:top;
       text-align:center;
       background:#fff;
       border:1px solid #e5e7eb;
       border-radius:18px;
       padding:18px;
-      margin:6px;
       box-sizing:border-box;
       box-shadow:0 6px 16px rgba(0,0,0,0.04);
     ">
@@ -731,7 +724,7 @@ function showMatch() {
         <div>
           ${state.roundByeTrack ? renderBye(state.roundByeTrack) : ""}
         </div>
-        <div>
+        <div style="display:flex; gap:12px; flex-wrap:wrap;">
           ${renderTrack(a, 0)}
           ${renderTrack(b, 1)}
         </div>
