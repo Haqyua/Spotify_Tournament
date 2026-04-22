@@ -5,27 +5,75 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Playlist Tournament</title>
 </head>
-<body style="font-family: Arial, sans-serif; max-width: 1100px; margin: 30px auto; padding: 0 16px;">
+<body style="margin:0; background:#f6f7fb; font-family:Arial, sans-serif; color:#1f2937;">
+  <div style="max-width:1200px; margin:0 auto; padding:24px 16px 40px;">
 
-  <h1>Playlist Tournament</h1>
+    <h1 style="margin:0 0 20px; font-size:32px;">Playlist Tournament</h1>
 
-  <div style="margin-bottom: 16px;">
-    <input
-      id="playlistUrl"
-      placeholder="Lien playlist Spotify"
-      style="width: 100%; max-width: 700px; padding: 10px; font-size: 16px;"
-    >
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:16px; margin-bottom:16px;">
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+        <input
+          id="playlistUrl"
+          placeholder="Lien playlist Spotify"
+          style="flex:1; min-width:320px; padding:12px 14px; font-size:16px; border:1px solid #d1d5db; border-radius:10px;"
+        >
+        <button onclick="start()" style="padding:12px 16px; font-size:16px; border:none; border-radius:10px; background:#111827; color:#fff; cursor:pointer;">Start</button>
+        <button onclick="undoLastSelection()" id="undoButton" style="padding:12px 16px; font-size:16px; border:none; border-radius:10px; background:#e5e7eb; cursor:pointer;">Undo</button>
+        <button onclick="resetTournament()" style="padding:12px 16px; font-size:16px; border:none; border-radius:10px; background:#e5e7eb; cursor:pointer;">Reset</button>
+        <button onclick="reconnectSpotify()" style="padding:12px 16px; font-size:16px; border:none; border-radius:10px; background:#e5e7eb; cursor:pointer;">Reconnect Spotify</button>
+        <button onclick="toggleQualified()" id="toggleQualifiedButton" style="padding:12px 16px; font-size:16px; border:none; border-radius:10px; background:#e5e7eb; cursor:pointer;">Masquer qualifiés</button>
+      </div>
+
+      <div style="margin-top:16px; display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <label for="volumeSlider"><b>Volume preview</b></label>
+          <input id="volumeSlider" type="range" min="0" max="100" value="60" oninput="updateVolume(this.value)" />
+          <span id="volumeLabel">60%</span>
+        </div>
+
+        <div style="font-size:14px; color:#4b5563;">
+          Raccourcis :
+          <b>←</b> gauche,
+          <b>→</b> droite,
+          <b>Z</b> undo,
+          <b>Space</b> play/pause gauche,
+          <b>Entrée</b> play/pause droite
+        </div>
+      </div>
+    </div>
+
+    <div id="status" style="margin-bottom:16px;"></div>
+
+    <div id="dashboard" style="display:none; gap:16px; margin-bottom:16px;">
+      <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:16px; flex:1;">
+        <div style="display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:10px;">
+          <div id="progressText" style="font-weight:bold;">Progression</div>
+          <div id="roundInfo" style="color:#4b5563;"></div>
+        </div>
+
+        <div style="width:100%; height:14px; background:#e5e7eb; border-radius:999px; overflow:hidden;">
+          <div id="progressBar" style="height:100%; width:0%; background:#111827;"></div>
+        </div>
+
+        <div style="display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-top:10px; font-size:14px; color:#4b5563;">
+          <div id="globalMatchesInfo"></div>
+          <div id="roundMatchesInfo"></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns: minmax(0, 1fr) 320px; gap:16px;">
+      <div id="app"></div>
+
+      <div id="qualifiedPanel" style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:16px; height:fit-content;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <h2 style="margin:0; font-size:18px;">Qualifiés</h2>
+          <span id="qualifiedCount" style="font-size:13px; color:#6b7280;">0</span>
+        </div>
+        <div id="qualifiedList" style="display:flex; flex-direction:column; gap:8px;"></div>
+      </div>
+    </div>
   </div>
-
-  <div style="margin-bottom: 16px;">
-    <button onclick="start()" style="padding: 10px 16px; font-size: 16px;">Start</button>
-    <button onclick="undoLastSelection()" id="undoButton" style="padding: 10px 16px; font-size: 16px; margin-left: 8px;">Undo</button>
-    <button onclick="resetTournament()" style="padding: 10px 16px; font-size: 16px; margin-left: 8px;">Reset</button>
-    <button onclick="reconnectSpotify()" style="padding: 10px 16px; font-size: 16px; margin-left: 8px;">Reconnect Spotify</button>
-  </div>
-
-  <div id="status" style="margin-bottom: 16px;"></div>
-  <div id="app"></div>
 
 <script>
 const CONFIG = {
@@ -39,7 +87,8 @@ const STORAGE = {
   verifier: "spotify_pkce_verifier",
   playlistUrl: "spotify_playlist_url",
   pendingStart: "spotify_pending_start",
-  tournament: "spotify_tournament_state"
+  tournament: "spotify_tournament_state",
+  qualifiedVisible: "spotify_qualified_visible"
 };
 
 const state = {
@@ -50,18 +99,25 @@ const state = {
   roundNumber: 1,
   roundByeTrack: null,
   lastUndoSnapshot: null,
-  byeTimeout: null
+  byeTimeout: null,
+  totalTracks: 0,
+  volume: 0.6,
+  qualifiedVisible: true,
+  currentLeftTrack: null,
+  currentRightTrack: null,
+  currentAudioTrackId: null,
+  audio: new Audio()
 };
 
 // -------- DOM --------
 const $ = id => document.getElementById(id);
 
 function setStatus(message = "") {
-  $("status").innerHTML = message ? `<p>${escapeHtml(message)}</p>` : "";
+  $("status").innerHTML = message ? `<div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:14px;">${escapeHtml(message)}</div>` : "";
 }
 
 function setError(message = "Erreur inconnue.") {
-  $("status").innerHTML = `<p style="color:#b00020;"><b>Erreur :</b> ${escapeHtml(message)}</p>`;
+  $("status").innerHTML = `<div style="background:#fff1f2; border:1px solid #fecdd3; color:#9f1239; border-radius:16px; padding:14px;"><b>Erreur :</b> ${escapeHtml(message)}</div>`;
 }
 
 function setApp(html = "") {
@@ -126,6 +182,7 @@ function simplifyTrack(track) {
     external_urls: {
       spotify: track.external_urls?.spotify || "#"
     },
+    preview_url: track.preview_url || null,
     type: "track"
   };
 }
@@ -135,6 +192,10 @@ function shuffle(array) {
     const j = Math.floor(Math.random() * (i + 1));
     [array[i], array[j]] = [array[j], array[i]];
   }
+}
+
+function getArtistNames(track) {
+  return (track.artists || []).map(a => a.name).join(", ") || "Artiste inconnu";
 }
 
 // -------- STORAGE --------
@@ -159,6 +220,14 @@ function clearPendingStart() {
   localStorage.removeItem(STORAGE.pendingStart);
 }
 
+function saveQualifiedVisibility() {
+  localStorage.setItem(STORAGE.qualifiedVisible, state.qualifiedVisible ? "1" : "0");
+}
+
+function loadQualifiedVisibility() {
+  state.qualifiedVisible = localStorage.getItem(STORAGE.qualifiedVisible) !== "0";
+}
+
 function saveTournament() {
   try {
     localStorage.setItem(STORAGE.tournament, JSON.stringify({
@@ -166,7 +235,8 @@ function saveTournament() {
       nextRound: state.nextRound,
       index: state.index,
       roundNumber: state.roundNumber,
-      roundByeTrack: state.roundByeTrack
+      roundByeTrack: state.roundByeTrack,
+      totalTracks: state.totalTracks
     }));
   } catch (error) {
     console.error("Erreur sauvegarde localStorage :", error);
@@ -184,6 +254,7 @@ function loadTournament() {
   state.index = data.index || 0;
   state.roundNumber = data.roundNumber || 1;
   state.roundByeTrack = data.roundByeTrack || null;
+  state.totalTracks = data.totalTracks || 0;
   state.lastUndoSnapshot = null;
   updateUndoButton();
 
@@ -323,6 +394,62 @@ async function getAllTracks(playlistId) {
   return { tracks, total };
 }
 
+// -------- AUDIO --------
+state.audio.volume = state.volume;
+
+function updateVolume(value) {
+  state.volume = Number(value) / 100;
+  state.audio.volume = state.volume;
+  $("volumeLabel").textContent = `${value}%`;
+}
+
+function stopAudio() {
+  state.audio.pause();
+  state.audio.currentTime = 0;
+  state.currentAudioTrackId = null;
+  refreshPlayButtons();
+}
+
+function togglePreview(track) {
+  if (!track || !track.preview_url) return;
+
+  if (state.currentAudioTrackId === track.id && !state.audio.paused) {
+    state.audio.pause();
+    refreshPlayButtons();
+    return;
+  }
+
+  if (state.currentAudioTrackId !== track.id) {
+    state.audio.src = track.preview_url;
+    state.currentAudioTrackId = track.id;
+  }
+
+  state.audio.volume = state.volume;
+  state.audio.play().catch(() => {});
+  refreshPlayButtons();
+}
+
+state.audio.addEventListener("ended", () => {
+  state.currentAudioTrackId = null;
+  refreshPlayButtons();
+});
+
+function isTrackPlaying(track) {
+  return !!track && state.currentAudioTrackId === track.id && !state.audio.paused;
+}
+
+function refreshPlayButtons() {
+  const buttons = document.querySelectorAll("[data-play-track-id]");
+  buttons.forEach(button => {
+    const trackId = button.getAttribute("data-play-track-id");
+    if (trackId && trackId === state.currentAudioTrackId && !state.audio.paused) {
+      button.textContent = "Pause";
+    } else {
+      button.textContent = "Play";
+    }
+  });
+}
+
 // -------- TOURNAMENT --------
 function resetTournamentData() {
   state.currentRound = [];
@@ -331,6 +458,9 @@ function resetTournamentData() {
   state.roundNumber = 1;
   state.roundByeTrack = null;
   state.lastUndoSnapshot = null;
+  state.totalTracks = 0;
+  state.currentLeftTrack = null;
+  state.currentRightTrack = null;
   updateUndoButton();
 }
 
@@ -373,6 +503,7 @@ function undoLastSelection() {
 
 function vote(choice) {
   stopByeTimeout();
+  stopAudio();
 
   state.lastUndoSnapshot = createUndoSnapshot();
   updateUndoButton();
@@ -386,75 +517,154 @@ function vote(choice) {
 
 function resetTournament() {
   stopByeTimeout();
+  stopAudio();
   clearTournament();
   clearPendingStart();
   state.accessToken = null;
   resetTournamentData();
   setApp("");
+  updateDashboard();
+  renderQualifiedList();
   setStatus("Tournoi réinitialisé.");
+}
+
+function toggleQualified() {
+  state.qualifiedVisible = !state.qualifiedVisible;
+  saveQualifiedVisibility();
+  renderQualifiedPanelState();
 }
 
 // -------- RENDER --------
 function renderTrack(track, side) {
   const imageUrl = track.album?.images?.[0]?.url || "";
-  const artists = (track.artists || []).map(a => a.name).join(", ") || "Artiste inconnu";
+  const artists = getArtistNames(track);
   const spotifyUrl = track.external_urls?.spotify || "#";
+  const hasPreview = !!track.preview_url;
 
   return `
     <div style="
-      width: 46%;
-      display: inline-block;
-      vertical-align: top;
-      text-align: center;
-      border: 1px solid #ddd;
-      border-radius: 12px;
-      padding: 16px;
-      margin: 8px;
-      box-sizing: border-box;
+      width:calc(50% - 12px);
+      min-width:280px;
+      display:inline-block;
+      vertical-align:top;
+      text-align:center;
+      background:#fff;
+      border:1px solid #e5e7eb;
+      border-radius:18px;
+      padding:18px;
+      margin:6px;
+      box-sizing:border-box;
+      box-shadow:0 6px 16px rgba(0,0,0,0.04);
     ">
-      ${imageUrl ? `<a href="${spotifyUrl}" target="_blank" rel="noopener noreferrer"><img src="${imageUrl}" alt="${escapeHtml(track.name)}" width="180" style="border-radius:8px;"></a><br><br>` : ""}
-      <div style="font-size:18px; font-weight:bold; margin-bottom:8px;">${escapeHtml(track.name)}</div>
-      <div style="margin-bottom:14px;">${escapeHtml(artists)}</div>
-      <button onclick="vote(${side})" style="padding:10px 16px; font-size:16px;">Choisir</button>
+      ${imageUrl ? `<a href="${spotifyUrl}" target="_blank" rel="noopener noreferrer"><img src="${imageUrl}" alt="${escapeHtml(track.name)}" width="220" style="width:100%; max-width:220px; border-radius:12px;"></a><br><br>` : ""}
+      <div style="font-size:20px; font-weight:bold; margin-bottom:8px;">${escapeHtml(track.name)}</div>
+      <div style="margin-bottom:16px; color:#4b5563;">${escapeHtml(artists)}</div>
+
+      <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
+        <button onclick="vote(${side})" style="padding:12px 18px; font-size:16px; border:none; border-radius:10px; background:#111827; color:#fff; cursor:pointer;">Choisir</button>
+        <button
+          ${hasPreview ? `onclick="togglePreviewById('${track.id}')"` : "disabled"}
+          data-play-track-id="${escapeHtml(track.id)}"
+          style="padding:12px 18px; font-size:16px; border:none; border-radius:10px; background:${hasPreview ? "#e5e7eb" : "#f3f4f6"}; color:${hasPreview ? "#111827" : "#9ca3af"}; cursor:${hasPreview ? "pointer" : "not-allowed"};"
+        >Play</button>
+      </div>
+
+      <div style="font-size:13px; color:#6b7280;">
+        ${hasPreview ? "Preview disponible" : "Pas de preview"}
+      </div>
     </div>
   `;
 }
 
 function renderBye(track) {
   const imageUrl = track.album?.images?.[0]?.url || "";
-  const artists = (track.artists || []).map(a => a.name).join(", ") || "Artiste inconnu";
+  const artists = getArtistNames(track);
 
   return `
     <div style="
-      width: 18%;
-      min-width: 140px;
-      display: inline-block;
-      vertical-align: top;
-      text-align: center;
-      opacity: 0.75;
-      font-size: 12px;
-      border: 1px dashed #bbb;
-      border-radius: 10px;
-      padding: 10px;
-      margin: 8px 12px 8px 0;
-      box-sizing: border-box;
+      background:#fff;
+      border:1px dashed #cbd5e1;
+      border-radius:16px;
+      padding:12px;
+      text-align:center;
+      font-size:12px;
+      opacity:0.85;
     ">
       <div style="font-size:11px; font-weight:bold; margin-bottom:8px;">BYE DU TOUR</div>
-      ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(track.name)}" width="70" style="border-radius:6px;"><br><br>` : ""}
+      ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(track.name)}" width="72" style="border-radius:8px;"><br><br>` : ""}
       <div style="font-weight:bold; margin-bottom:4px;">${escapeHtml(track.name)}</div>
-      <div>${escapeHtml(artists)}</div>
+      <div style="color:#6b7280;">${escapeHtml(artists)}</div>
     </div>
   `;
 }
 
+function renderQualifiedList() {
+  const list = $("qualifiedList");
+  const qualified = state.nextRound || [];
+  $("qualifiedCount").textContent = `${qualified.length}`;
+
+  if (!state.qualifiedVisible) {
+    list.innerHTML = "";
+    return;
+  }
+
+  if (qualified.length === 0) {
+    list.innerHTML = `<div style="font-size:14px; color:#6b7280;">Aucun morceau qualifié pour le moment.</div>`;
+    return;
+  }
+
+  list.innerHTML = qualified.map((track, index) => `
+    <div style="display:flex; gap:10px; align-items:center; padding:8px; border:1px solid #f1f5f9; border-radius:10px;">
+      <div style="width:24px; font-size:12px; color:#6b7280;">${index + 1}</div>
+      <div style="width:40px;">
+        ${track.album?.images?.[0]?.url ? `<img src="${track.album.images[0].url}" width="40" height="40" style="border-radius:8px; object-fit:cover;">` : ""}
+      </div>
+      <div style="min-width:0; flex:1;">
+        <div style="font-size:13px; font-weight:bold; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(track.name)}</div>
+        <div style="font-size:12px; color:#6b7280; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(getArtistNames(track))}</div>
+      </div>
+    </div>
+  `).join("");
+}
+
+function renderQualifiedPanelState() {
+  $("qualifiedPanel").style.display = state.qualifiedVisible ? "block" : "none";
+  $("toggleQualifiedButton").textContent = state.qualifiedVisible ? "Masquer qualifiés" : "Afficher qualifiés";
+  renderQualifiedList();
+}
+
+function updateDashboard() {
+  const active = state.currentRound.length > 0 || state.nextRound.length > 0;
+  $("dashboard").style.display = active ? "flex" : "none";
+  if (!active) return;
+
+  const totalMatches = Math.max(0, state.totalTracks - 1);
+  const completedMatches = state.nextRound.length + (state.totalTracks - state.currentRound.length - state.nextRound.length);
+  const progressPercent = totalMatches > 0 ? (completedMatches / totalMatches) * 100 : 0;
+
+  const remainingInCurrentRound = Math.max(0, Math.ceil((state.currentRound.length - state.index) / 2));
+  const totalInCurrentRound = Math.ceil(state.currentRound.length / 2);
+
+  $("progressBar").style.width = `${progressPercent}%`;
+  $("progressText").textContent = `Progression : ${completedMatches} / ${totalMatches} matchs`;
+  $("roundInfo").textContent = `Tour ${state.roundNumber}`;
+  $("globalMatchesInfo").textContent = `${Math.max(0, totalMatches - completedMatches)} matchs restants au total`;
+  $("roundMatchesInfo").textContent = `${remainingInCurrentRound} / ${totalInCurrentRound} matchs restants dans ce tour`;
+}
+
 function showWinner(track) {
   setStatus("");
+  state.currentLeftTrack = track;
+  state.currentRightTrack = null;
   setApp(`
-    <h2>Gagnant</h2>
-    <div style="max-width: 360px;">
-      ${renderTrack(track, 0)}
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:20px;">
+      <h2 style="margin-top:0;">Gagnant</h2>
+      <div style="max-width:420px;">
+        ${renderTrack(track, 0)}
+      </div>
     </div>
   `);
+  refreshPlayButtons();
 }
 
 function showMatch() {
@@ -467,6 +677,8 @@ function showMatch() {
       clearTournament();
       state.lastUndoSnapshot = null;
       updateUndoButton();
+      updateDashboard();
+      renderQualifiedList();
       showWinner(winner);
       return;
     }
@@ -481,15 +693,19 @@ function showMatch() {
 
   const a = state.currentRound[state.index];
   const b = state.currentRound[state.index + 1];
+  state.currentLeftTrack = a || null;
+  state.currentRightTrack = b || null;
+
+  updateDashboard();
+  renderQualifiedList();
 
   if (!b) {
     setStatus("");
     setApp(`
-      <p><b>Tour ${state.roundNumber}</b></p>
-      <div style="display:flex; align-items:flex-start; gap:12px;">
+      <div style="display:grid; grid-template-columns:240px minmax(0,1fr); gap:16px;">
         ${renderBye(a)}
-        <div style="flex:1; border:1px solid #ddd; border-radius:12px; padding:20px; margin-top:8px;">
-          <p style="margin:0; font-size:18px;"><b>${escapeHtml(a.name)}</b> passe automatiquement au tour suivant.</p>
+        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:24px;">
+          <p style="margin:0; font-size:20px;"><b>${escapeHtml(a.name)}</b> passe automatiquement au tour suivant.</p>
         </div>
       </div>
     `);
@@ -497,6 +713,7 @@ function showMatch() {
     state.nextRound.push(a);
     state.index += 2;
     saveTournament();
+    renderQualifiedList();
 
     state.byeTimeout = setTimeout(showMatch, CONFIG.byeDelay);
     return;
@@ -504,25 +721,33 @@ function showMatch() {
 
   setStatus("");
   setApp(`
-    <p><b>Tour ${state.roundNumber} — Match ${Math.floor(state.index / 2) + 1}</b></p>
-    <div style="display:flex; align-items:flex-start; gap:12px;">
-      <div style="width:18%; min-width:140px;">
-        ${state.roundByeTrack ? renderBye(state.roundByeTrack) : ""}
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:18px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:16px;">
+        <div><b>Tour ${state.roundNumber} — Match ${Math.floor(state.index / 2) + 1}</b></div>
+        <div style="font-size:14px; color:#6b7280;">${state.roundByeTrack ? "Un bye est attribué ce tour" : "Aucun bye ce tour"}</div>
       </div>
-      <div style="flex:1;">
-        ${renderTrack(a, 0)}
-        ${renderTrack(b, 1)}
+
+      <div style="display:grid; grid-template-columns:220px minmax(0,1fr); gap:16px;">
+        <div>
+          ${state.roundByeTrack ? renderBye(state.roundByeTrack) : ""}
+        </div>
+        <div>
+          ${renderTrack(a, 0)}
+          ${renderTrack(b, 1)}
+        </div>
       </div>
     </div>
   `);
 
   saveTournament();
+  refreshPlayButtons();
 }
 
 // -------- FLOW --------
 async function start() {
   try {
     stopByeTimeout();
+    stopAudio();
     setStatus("Chargement...");
 
     const playlistUrl = $("playlistUrl").value.trim();
@@ -554,9 +779,12 @@ async function start() {
 
     resetTournamentData();
     state.currentRound = tracks;
+    state.totalTracks = tracks.length;
     prepareRound();
 
     saveTournament();
+    renderQualifiedList();
+    renderQualifiedPanelState();
     showMatch();
   } catch (error) {
     console.error(error);
@@ -576,6 +804,9 @@ async function start() {
 async function init() {
   try {
     restorePlaylistUrl();
+    loadQualifiedVisibility();
+    renderQualifiedPanelState();
+    updateVolume(60);
 
     const code = getQueryParam("code");
     if (code) {
@@ -584,6 +815,7 @@ async function init() {
     }
 
     if (loadTournament()) {
+      renderQualifiedPanelState();
       showMatch();
       return;
     }
@@ -595,6 +827,7 @@ async function init() {
     }
 
     updateUndoButton();
+    updateDashboard();
     setStatus("");
   } catch (error) {
     console.error(error);
@@ -602,8 +835,45 @@ async function init() {
   }
 }
 
-window.onload = init;
-</script>
+window.togglePreviewById = function(trackId) {
+  const track = [state.currentLeftTrack, state.currentRightTrack, state.roundByeTrack]
+    .find(t => t && t.id === trackId);
+  if (track) togglePreview(track);
+};
 
+window.onload = init;
+
+// -------- KEYBOARD --------
+document.addEventListener("keydown", (event) => {
+  const tag = document.activeElement?.tagName?.toLowerCase();
+  const isTyping = tag === "input" || tag === "textarea";
+  if (isTyping) return;
+
+  if (event.key === "ArrowLeft" && state.currentLeftTrack && state.currentRightTrack) {
+    event.preventDefault();
+    vote(0);
+  }
+
+  if (event.key === "ArrowRight" && state.currentLeftTrack && state.currentRightTrack) {
+    event.preventDefault();
+    vote(1);
+  }
+
+  if (event.key.toLowerCase() === "z") {
+    event.preventDefault();
+    undoLastSelection();
+  }
+
+  if (event.code === "Space" && state.currentLeftTrack) {
+    event.preventDefault();
+    togglePreview(state.currentLeftTrack);
+  }
+
+  if (event.key === "Enter" && state.currentRightTrack) {
+    event.preventDefault();
+    togglePreview(state.currentRightTrack);
+  }
+});
+</script>
 </body>
 </html>
