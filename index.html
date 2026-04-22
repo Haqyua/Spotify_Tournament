@@ -28,37 +28,54 @@
   <div id="app"></div>
 
 <script>
-const CLIENT_ID = "22522b51012f4caeb90b48d7f2b881f9";
-const REDIRECT_URI = "https://haqyua.github.io/Spotify_Tournament/";
+const CONFIG = {
+  clientId: "22522b51012f4caeb90b48d7f2b881f9",
+  redirectUri: "https://haqyua.github.io/Spotify_Tournament/",
+  scopes: ["playlist-read-private", "playlist-read-collaborative"].join(" "),
+  byeDelay: 1200
+};
 
-const STORAGE_KEYS = {
+const STORAGE = {
   verifier: "spotify_pkce_verifier",
   playlistUrl: "spotify_playlist_url",
   pendingStart: "spotify_pending_start",
   tournament: "spotify_tournament_state"
 };
 
-let accessToken = null;
-let currentRound = [];
-let nextRound = [];
-let index = 0;
-let byeTimeout = null;
-let roundByeTrack = null;
-let roundNumber = 1;
-let lastUndoSnapshot = null;
+const state = {
+  accessToken: null,
+  currentRound: [],
+  nextRound: [],
+  index: 0,
+  roundNumber: 1,
+  roundByeTrack: null,
+  lastUndoSnapshot: null,
+  byeTimeout: null
+};
 
-function setStatus(message) {
-  document.getElementById("status").innerHTML = `<p>${escapeHtml(message)}</p>`;
+// -------- DOM --------
+const $ = id => document.getElementById(id);
+
+function setStatus(message = "") {
+  $("status").innerHTML = message ? `<p>${escapeHtml(message)}</p>` : "";
 }
 
-function setError(message) {
-  document.getElementById("status").innerHTML = `<p style="color:#b00020;"><b>Erreur :</b> ${escapeHtml(message)}</p>`;
+function setError(message = "Erreur inconnue.") {
+  $("status").innerHTML = `<p style="color:#b00020;"><b>Erreur :</b> ${escapeHtml(message)}</p>`;
 }
 
-function clearStatus() {
-  document.getElementById("status").innerHTML = "";
+function setApp(html = "") {
+  $("app").innerHTML = html;
 }
 
+function updateUndoButton() {
+  const enabled = !!state.lastUndoSnapshot;
+  $("undoButton").disabled = !enabled;
+  $("undoButton").style.opacity = enabled ? "1" : "0.5";
+  $("undoButton").style.cursor = enabled ? "pointer" : "not-allowed";
+}
+
+// -------- UTILS --------
 function escapeHtml(str) {
   return String(str)
     .replaceAll("&", "&amp;")
@@ -68,160 +85,31 @@ function escapeHtml(str) {
     .replaceAll("'", "&#039;");
 }
 
-function savePlaylistUrl() {
-  const value = document.getElementById("playlistUrl").value.trim();
-  localStorage.setItem(STORAGE_KEYS.playlistUrl, value);
-}
-
-function restorePlaylistUrl() {
-  const saved = localStorage.getItem(STORAGE_KEYS.playlistUrl);
-  if (saved) {
-    document.getElementById("playlistUrl").value = saved;
-  }
-}
-
-function savePendingStart(value) {
-  localStorage.setItem(STORAGE_KEYS.pendingStart, value ? "1" : "0");
-}
-
-function getPendingStart() {
-  return localStorage.getItem(STORAGE_KEYS.pendingStart) === "1";
-}
-
-function clearPendingStart() {
-  localStorage.removeItem(STORAGE_KEYS.pendingStart);
-}
-
-function updateUndoButton() {
-  const button = document.getElementById("undoButton");
-  if (!button) return;
-  button.disabled = !lastUndoSnapshot;
-  button.style.opacity = lastUndoSnapshot ? "1" : "0.5";
-  button.style.cursor = lastUndoSnapshot ? "pointer" : "not-allowed";
-}
-
-// -------- PKCE --------
 function randomString(length = 64) {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   const array = new Uint8Array(length);
   crypto.getRandomValues(array);
-  let result = "";
-  for (let i = 0; i < array.length; i++) {
-    result += chars[array[i] % chars.length];
-  }
-  return result;
+  return Array.from(array, x => chars[x % chars.length]).join("");
 }
 
-async function sha256(plain) {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(plain);
-  return await crypto.subtle.digest("SHA-256", data);
+async function sha256(text) {
+  return await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
 }
 
 function base64UrlEncode(bytes) {
   let binary = "";
   const arr = new Uint8Array(bytes);
-  for (let i = 0; i < arr.byteLength; i++) {
-    binary += String.fromCharCode(arr[i]);
-  }
+  for (let i = 0; i < arr.length; i++) binary += String.fromCharCode(arr[i]);
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-async function generatePKCE() {
-  const verifier = randomString(64);
-  const challenge = base64UrlEncode(await sha256(verifier));
-  return { verifier, challenge };
-}
-
-async function redirectToAuth() {
-  const { verifier, challenge } = await generatePKCE();
-  localStorage.setItem(STORAGE_KEYS.verifier, verifier);
-
-  const scope = [
-    "playlist-read-private",
-    "playlist-read-collaborative"
-  ].join(" ");
-
-  const state = randomString(24);
-  sessionStorage.setItem("spotify_auth_state", state);
-
-  const authUrl = new URL("https://accounts.spotify.com/authorize");
-  authUrl.search = new URLSearchParams({
-    client_id: CLIENT_ID,
-    response_type: "code",
-    redirect_uri: REDIRECT_URI,
-    code_challenge_method: "S256",
-    code_challenge: challenge,
-    scope,
-    state
-  }).toString();
-
-  window.location.href = authUrl.toString();
-}
-
-function reconnectSpotify() {
-  savePendingStart(true);
-  savePlaylistUrl();
-  redirectToAuth();
-}
-
-function getCode() {
-  return new URLSearchParams(window.location.search).get("code");
-}
-
-function getAuthError() {
-  return new URLSearchParams(window.location.search).get("error");
-}
-
-function getState() {
-  return new URLSearchParams(window.location.search).get("state");
-}
-
-async function fetchAccessToken() {
-  const authError = getAuthError();
-  if (authError) {
-    throw new Error("Autorisation Spotify refusée : " + authError);
+function stopByeTimeout() {
+  if (state.byeTimeout) {
+    clearTimeout(state.byeTimeout);
+    state.byeTimeout = null;
   }
-
-  const code = getCode();
-  if (!code) return null;
-
-  const returnedState = getState();
-  const expectedState = sessionStorage.getItem("spotify_auth_state");
-  if (expectedState && returnedState !== expectedState) {
-    throw new Error("État d'autorisation invalide.");
-  }
-
-  const verifier = localStorage.getItem(STORAGE_KEYS.verifier);
-  if (!verifier) {
-    throw new Error("Code verifier PKCE introuvable.");
-  }
-
-  const res = await fetch("https://accounts.spotify.com/api/token", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded"
-    },
-    body: new URLSearchParams({
-      client_id: CLIENT_ID,
-      grant_type: "authorization_code",
-      code,
-      redirect_uri: REDIRECT_URI,
-      code_verifier: verifier
-    })
-  });
-
-  const data = await res.json();
-
-  if (!res.ok) {
-    throw new Error(data.error_description || data.error || "Échec de récupération du token.");
-  }
-
-  window.history.replaceState({}, document.title, REDIRECT_URI);
-  return data.access_token;
 }
 
-// -------- PLAYLIST --------
 function getPlaylistId(url) {
   const match = url.match(/playlist\/([a-zA-Z0-9]+)/);
   return match ? match[1] : null;
@@ -242,31 +130,163 @@ function simplifyTrack(track) {
   };
 }
 
-async function spotifyApiFetch(url) {
-  if (!accessToken) {
-    throw new Error("NOT_AUTHENTICATED");
+function shuffle(array) {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+}
+
+// -------- STORAGE --------
+function savePlaylistUrl() {
+  localStorage.setItem(STORAGE.playlistUrl, $("playlistUrl").value.trim());
+}
+
+function restorePlaylistUrl() {
+  const saved = localStorage.getItem(STORAGE.playlistUrl);
+  if (saved) $("playlistUrl").value = saved;
+}
+
+function setPendingStart(value) {
+  localStorage.setItem(STORAGE.pendingStart, value ? "1" : "0");
+}
+
+function getPendingStart() {
+  return localStorage.getItem(STORAGE.pendingStart) === "1";
+}
+
+function clearPendingStart() {
+  localStorage.removeItem(STORAGE.pendingStart);
+}
+
+function saveTournament() {
+  try {
+    localStorage.setItem(STORAGE.tournament, JSON.stringify({
+      currentRound: state.currentRound,
+      nextRound: state.nextRound,
+      index: state.index,
+      roundNumber: state.roundNumber,
+      roundByeTrack: state.roundByeTrack
+    }));
+  } catch (error) {
+    console.error("Erreur sauvegarde localStorage :", error);
+    setStatus("Sauvegarde locale désactivée pour cette playlist trop volumineuse.");
+  }
+}
+
+function loadTournament() {
+  const raw = localStorage.getItem(STORAGE.tournament);
+  if (!raw) return false;
+
+  const data = JSON.parse(raw);
+  state.currentRound = data.currentRound || [];
+  state.nextRound = data.nextRound || [];
+  state.index = data.index || 0;
+  state.roundNumber = data.roundNumber || 1;
+  state.roundByeTrack = data.roundByeTrack || null;
+  state.lastUndoSnapshot = null;
+  updateUndoButton();
+
+  return state.currentRound.length > 0 || state.nextRound.length > 0;
+}
+
+function clearTournament() {
+  localStorage.removeItem(STORAGE.tournament);
+}
+
+// -------- AUTH --------
+async function generatePKCE() {
+  const verifier = randomString(64);
+  const challenge = base64UrlEncode(await sha256(verifier));
+  return { verifier, challenge };
+}
+
+function getQueryParam(name) {
+  return new URLSearchParams(window.location.search).get(name);
+}
+
+async function redirectToAuth() {
+  const { verifier, challenge } = await generatePKCE();
+  localStorage.setItem(STORAGE.verifier, verifier);
+
+  const authState = randomString(24);
+  sessionStorage.setItem("spotify_auth_state", authState);
+
+  const authUrl = new URL("https://accounts.spotify.com/authorize");
+  authUrl.search = new URLSearchParams({
+    client_id: CONFIG.clientId,
+    response_type: "code",
+    redirect_uri: CONFIG.redirectUri,
+    code_challenge_method: "S256",
+    code_challenge: challenge,
+    scope: CONFIG.scopes,
+    state: authState
+  }).toString();
+
+  window.location.href = authUrl.toString();
+}
+
+async function fetchAccessToken() {
+  const authError = getQueryParam("error");
+  if (authError) throw new Error("Autorisation Spotify refusée : " + authError);
+
+  const code = getQueryParam("code");
+  if (!code) return null;
+
+  const returnedState = getQueryParam("state");
+  const expectedState = sessionStorage.getItem("spotify_auth_state");
+  if (expectedState && returnedState !== expectedState) {
+    throw new Error("État d'autorisation invalide.");
   }
 
+  const verifier = localStorage.getItem(STORAGE.verifier);
+  if (!verifier) throw new Error("Code verifier PKCE introuvable.");
+
+  const res = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: CONFIG.clientId,
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: CONFIG.redirectUri,
+      code_verifier: verifier
+    })
+  });
+
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || data.error || "Échec de récupération du token.");
+
+  window.history.replaceState({}, document.title, CONFIG.redirectUri);
+  return data.access_token;
+}
+
+function reconnectSpotify() {
+  savePlaylistUrl();
+  setPendingStart(true);
+  redirectToAuth();
+}
+
+// -------- SPOTIFY API --------
+async function spotifyApiFetch(url) {
+  if (!state.accessToken) throw new Error("NOT_AUTHENTICATED");
+
   const res = await fetch(url, {
-    headers: {
-      Authorization: "Bearer " + accessToken
-    }
+    headers: { Authorization: "Bearer " + state.accessToken }
   });
 
   const data = await res.json();
 
   if (!res.ok) {
     const message = data.error?.message || "Erreur API Spotify";
-
     if (
       res.status === 401 ||
       message.toLowerCase().includes("token expired") ||
       message.toLowerCase().includes("access token expired")
     ) {
-      accessToken = null;
+      state.accessToken = null;
       throw new Error("TOKEN_EXPIRED");
     }
-
     throw new Error(message);
   }
 
@@ -287,9 +307,7 @@ async function getAllTracks(playlistId) {
     const url = `https://api.spotify.com/v1/playlists/${playlistId}/items?limit=50&offset=${offset}&additional_types=track`;
     const data = await spotifyApiFetch(url);
 
-    if (total === null) {
-      total = data.total ?? 0;
-    }
+    if (total === null) total = data.total ?? 0;
 
     const batch = (data.items || [])
       .map(entry => entry.item || entry.track)
@@ -298,110 +316,89 @@ async function getAllTracks(playlistId) {
 
     tracks.push(...batch);
 
-    if (!data.next) {
-      break;
-    }
-
+    if (!data.next) break;
     offset += 50;
   }
 
   return { tracks, total };
 }
 
-// -------- SHUFFLE --------
-function shuffle(array) {
-  for (let i = array.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [array[i], array[j]] = [array[j], array[i]];
-  }
+// -------- TOURNAMENT --------
+function resetTournamentData() {
+  state.currentRound = [];
+  state.nextRound = [];
+  state.index = 0;
+  state.roundNumber = 1;
+  state.roundByeTrack = null;
+  state.lastUndoSnapshot = null;
+  updateUndoButton();
 }
 
 function prepareRound() {
-  roundByeTrack = null;
+  state.roundByeTrack = null;
 
-  if (currentRound.length > 1 && currentRound.length % 2 === 1) {
-    const byeIndex = Math.floor(Math.random() * currentRound.length);
-    roundByeTrack = currentRound[byeIndex];
-    currentRound.splice(byeIndex, 1);
-    currentRound.push(roundByeTrack);
+  if (state.currentRound.length > 1 && state.currentRound.length % 2 === 1) {
+    const byeIndex = Math.floor(Math.random() * state.currentRound.length);
+    state.roundByeTrack = state.currentRound[byeIndex];
+    state.currentRound.splice(byeIndex, 1);
+    state.currentRound.push(state.roundByeTrack);
   }
 }
 
-// -------- UNDO --------
 function createUndoSnapshot() {
   return {
-    currentRound: [...currentRound],
-    nextRound: [...nextRound],
-    index,
-    roundNumber,
-    roundByeTrack
+    currentRound: [...state.currentRound],
+    nextRound: [...state.nextRound],
+    index: state.index,
+    roundNumber: state.roundNumber,
+    roundByeTrack: state.roundByeTrack
   };
 }
 
 function undoLastSelection() {
-  if (byeTimeout) {
-    clearTimeout(byeTimeout);
-    byeTimeout = null;
-  }
+  stopByeTimeout();
+  if (!state.lastUndoSnapshot) return;
 
-  if (!lastUndoSnapshot) {
-    return;
-  }
+  state.currentRound = [...state.lastUndoSnapshot.currentRound];
+  state.nextRound = [...state.lastUndoSnapshot.nextRound];
+  state.index = state.lastUndoSnapshot.index;
+  state.roundNumber = state.lastUndoSnapshot.roundNumber;
+  state.roundByeTrack = state.lastUndoSnapshot.roundByeTrack || null;
+  state.lastUndoSnapshot = null;
 
-  currentRound = [...lastUndoSnapshot.currentRound];
-  nextRound = [...lastUndoSnapshot.nextRound];
-  index = lastUndoSnapshot.index;
-  roundNumber = lastUndoSnapshot.roundNumber;
-  roundByeTrack = lastUndoSnapshot.roundByeTrack || null;
-  lastUndoSnapshot = null;
-
-  saveState();
+  saveTournament();
   updateUndoButton();
   showMatch();
 }
 
-// -------- SAVE / LOAD --------
-function saveState() {
-  try {
-    localStorage.setItem(STORAGE_KEYS.tournament, JSON.stringify({
-      currentRound,
-      nextRound,
-      index,
-      roundNumber,
-      roundByeTrack
-    }));
-  } catch (error) {
-    console.error("Erreur sauvegarde localStorage :", error);
-    setStatus("Sauvegarde locale désactivée pour cette playlist trop volumineuse.");
-  }
-}
+function vote(choice) {
+  stopByeTimeout();
 
-function loadState() {
-  const raw = localStorage.getItem(STORAGE_KEYS.tournament);
-  if (!raw) return false;
-
-  const parsed = JSON.parse(raw);
-  currentRound = parsed.currentRound || [];
-  nextRound = parsed.nextRound || [];
-  index = parsed.index || 0;
-  roundNumber = parsed.roundNumber || 1;
-  roundByeTrack = parsed.roundByeTrack || null;
-  lastUndoSnapshot = null;
-
+  state.lastUndoSnapshot = createUndoSnapshot();
   updateUndoButton();
 
-  return currentRound.length > 0 || nextRound.length > 0;
+  state.nextRound.push(state.currentRound[state.index + choice]);
+  state.index += 2;
+
+  saveTournament();
+  showMatch();
 }
 
-function clearState() {
-  localStorage.removeItem(STORAGE_KEYS.tournament);
+function resetTournament() {
+  stopByeTimeout();
+  clearTournament();
+  clearPendingStart();
+  state.accessToken = null;
+  resetTournamentData();
+  setApp("");
+  setStatus("Tournoi réinitialisé.");
 }
 
-// -------- UI --------
-function renderTrack(t, side) {
-  const imageUrl = t.album?.images?.[0]?.url || "";
-  const artists = (t.artists || []).map(a => a.name).join(", ") || "Artiste inconnu";
-  const spotifyUrl = t.external_urls?.spotify || "#";
+// -------- RENDER --------
+function renderTrack(track, side) {
+  const imageUrl = track.album?.images?.[0]?.url || "";
+  const artists = (track.artists || []).map(a => a.name).join(", ") || "Artiste inconnu";
+  const spotifyUrl = track.external_urls?.spotify || "#";
 
   return `
     <div style="
@@ -415,8 +412,8 @@ function renderTrack(t, side) {
       margin: 8px;
       box-sizing: border-box;
     ">
-      ${imageUrl ? `<a href="${spotifyUrl}" target="_blank" rel="noopener noreferrer"><img src="${imageUrl}" alt="${escapeHtml(t.name)}" width="180" style="border-radius:8px;"></a><br><br>` : ""}
-      <div style="font-size:18px; font-weight:bold; margin-bottom:8px;">${escapeHtml(t.name)}</div>
+      ${imageUrl ? `<a href="${spotifyUrl}" target="_blank" rel="noopener noreferrer"><img src="${imageUrl}" alt="${escapeHtml(track.name)}" width="180" style="border-radius:8px;"></a><br><br>` : ""}
+      <div style="font-size:18px; font-weight:bold; margin-bottom:8px;">${escapeHtml(track.name)}</div>
       <div style="margin-bottom:14px;">${escapeHtml(artists)}</div>
       <button onclick="vote(${side})" style="padding:10px 16px; font-size:16px;">Choisir</button>
     </div>
@@ -451,162 +448,96 @@ function renderBye(track) {
 }
 
 function showWinner(track) {
-  clearStatus();
-  document.getElementById("app").innerHTML = `
+  setStatus("");
+  setApp(`
     <h2>Gagnant</h2>
     <div style="max-width: 360px;">
       ${renderTrack(track, 0)}
     </div>
-  `;
+  `);
 }
 
 function showMatch() {
-  if (byeTimeout) {
-    clearTimeout(byeTimeout);
-    byeTimeout = null;
-  }
-
+  stopByeTimeout();
   updateUndoButton();
 
-  if (index >= currentRound.length) {
-    if (nextRound.length === 1) {
-      const winner = nextRound[0];
-      clearState();
-      lastUndoSnapshot = null;
+  if (state.index >= state.currentRound.length) {
+    if (state.nextRound.length === 1) {
+      const winner = state.nextRound[0];
+      clearTournament();
+      state.lastUndoSnapshot = null;
       updateUndoButton();
       showWinner(winner);
       return;
     }
 
-    currentRound = [...nextRound];
-    nextRound = [];
-    index = 0;
-    roundNumber += 1;
+    state.currentRound = [...state.nextRound];
+    state.nextRound = [];
+    state.index = 0;
+    state.roundNumber += 1;
     prepareRound();
-    saveState();
+    saveTournament();
   }
 
-  const a = currentRound[index];
-  const b = currentRound[index + 1];
-  const isCurrentBye = !b;
+  const a = state.currentRound[state.index];
+  const b = state.currentRound[state.index + 1];
 
-  if (isCurrentBye) {
-    clearStatus();
-    document.getElementById("app").innerHTML = `
-      <p><b>Tour ${roundNumber}</b></p>
+  if (!b) {
+    setStatus("");
+    setApp(`
+      <p><b>Tour ${state.roundNumber}</b></p>
       <div style="display:flex; align-items:flex-start; gap:12px;">
         ${renderBye(a)}
-        <div style="
-          flex:1;
-          border:1px solid #ddd;
-          border-radius:12px;
-          padding:20px;
-          margin-top:8px;
-        ">
+        <div style="flex:1; border:1px solid #ddd; border-radius:12px; padding:20px; margin-top:8px;">
           <p style="margin:0; font-size:18px;"><b>${escapeHtml(a.name)}</b> passe automatiquement au tour suivant.</p>
         </div>
       </div>
-    `;
+    `);
 
-    nextRound.push(a);
-    index += 2;
-    saveState();
+    state.nextRound.push(a);
+    state.index += 2;
+    saveTournament();
 
-    byeTimeout = setTimeout(() => {
-      showMatch();
-    }, 1200);
-
+    state.byeTimeout = setTimeout(showMatch, CONFIG.byeDelay);
     return;
   }
 
-  clearStatus();
-  document.getElementById("app").innerHTML = `
-    <p><b>Tour ${roundNumber} — Match ${Math.floor(index / 2) + 1}</b></p>
+  setStatus("");
+  setApp(`
+    <p><b>Tour ${state.roundNumber} — Match ${Math.floor(state.index / 2) + 1}</b></p>
     <div style="display:flex; align-items:flex-start; gap:12px;">
       <div style="width:18%; min-width:140px;">
-        ${roundByeTrack ? renderBye(roundByeTrack) : ""}
+        ${state.roundByeTrack ? renderBye(state.roundByeTrack) : ""}
       </div>
       <div style="flex:1;">
         ${renderTrack(a, 0)}
         ${renderTrack(b, 1)}
       </div>
     </div>
-  `;
+  `);
 
-  saveState();
+  saveTournament();
 }
 
-// -------- VOTE --------
-function vote(choice) {
-  if (byeTimeout) {
-    clearTimeout(byeTimeout);
-    byeTimeout = null;
-  }
-
-  lastUndoSnapshot = createUndoSnapshot();
-  updateUndoButton();
-
-  nextRound.push(currentRound[index + choice]);
-  index += 2;
-
-  saveState();
-  showMatch();
-}
-
-// -------- RESET --------
-function resetTournament() {
-  if (byeTimeout) {
-    clearTimeout(byeTimeout);
-    byeTimeout = null;
-  }
-
-  clearState();
-  clearPendingStart();
-  accessToken = null;
-  currentRound = [];
-  nextRound = [];
-  index = 0;
-  roundByeTrack = null;
-  roundNumber = 1;
-  lastUndoSnapshot = null;
-  updateUndoButton();
-  document.getElementById("app").innerHTML = "";
-  setStatus("Tournoi réinitialisé.");
-}
-
-// -------- START --------
+// -------- FLOW --------
 async function start() {
   try {
-    if (byeTimeout) {
-      clearTimeout(byeTimeout);
-      byeTimeout = null;
-    }
-
+    stopByeTimeout();
     setStatus("Chargement...");
 
-    if (!CLIENT_ID) {
-      throw new Error("CLIENT_ID manquant.");
-    }
-
-    if (!REDIRECT_URI) {
-      throw new Error("REDIRECT_URI manquant.");
-    }
-
-    const playlistUrl = document.getElementById("playlistUrl").value.trim();
+    const playlistUrl = $("playlistUrl").value.trim();
     const playlistId = getPlaylistId(playlistUrl);
 
-    if (!playlistId) {
-      throw new Error("Lien de playlist invalide.");
-    }
+    if (!playlistId) throw new Error("Lien de playlist invalide.");
 
     savePlaylistUrl();
 
-    if (!accessToken) {
-      accessToken = await fetchAccessToken();
+    if (!state.accessToken) {
+      state.accessToken = await fetchAccessToken();
     }
 
-    if (!accessToken) {
-      savePendingStart(true);
+    if (!state.accessToken) {
+      setPendingStart(true);
       await redirectToAuth();
       return;
     }
@@ -614,32 +545,26 @@ async function start() {
     const meta = await getPlaylistMeta(playlistId);
     setStatus(`Lecture de la playlist "${meta.name}"... ${meta.tracks?.total ?? 0} éléments annoncés.`);
 
-    const result = await getAllTracks(playlistId);
-    const tracks = result.tracks;
-
+    const { tracks, total } = await getAllTracks(playlistId);
     if (tracks.length === 0) {
-      throw new Error(`Aucune musique trouvée. Spotify annonce ${result.total ?? 0} items, mais 0 piste exploitable a été récupérée.`);
+      throw new Error(`Aucune musique trouvée. Spotify annonce ${total ?? 0} items, mais 0 piste exploitable a été récupérée.`);
     }
 
     shuffle(tracks);
 
-    currentRound = tracks;
-    nextRound = [];
-    index = 0;
-    roundNumber = 1;
-    lastUndoSnapshot = null;
+    resetTournamentData();
+    state.currentRound = tracks;
     prepareRound();
 
-    saveState();
-    updateUndoButton();
+    saveTournament();
     showMatch();
   } catch (error) {
     console.error(error);
 
     if (error.message === "TOKEN_EXPIRED" || error.message === "NOT_AUTHENTICATED") {
       setStatus("Session Spotify expirée, reconnexion...");
-      savePendingStart(true);
       savePlaylistUrl();
+      setPendingStart(true);
       await redirectToAuth();
       return;
     }
@@ -648,18 +573,17 @@ async function start() {
   }
 }
 
-// -------- INIT --------
-window.onload = async () => {
+async function init() {
   try {
     restorePlaylistUrl();
 
-    const code = getCode();
+    const code = getQueryParam("code");
     if (code) {
       setStatus("Connexion Spotify...");
-      accessToken = await fetchAccessToken();
+      state.accessToken = await fetchAccessToken();
     }
 
-    if (loadState()) {
+    if (loadTournament()) {
       showMatch();
       return;
     }
@@ -671,12 +595,14 @@ window.onload = async () => {
     }
 
     updateUndoButton();
-    clearStatus();
+    setStatus("");
   } catch (error) {
     console.error(error);
     setError(error.message || "Erreur au chargement.");
   }
-};
+}
+
+window.onload = init;
 </script>
 
 </body>
