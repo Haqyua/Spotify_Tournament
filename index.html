@@ -6,12 +6,12 @@
   <title>Playlist Tournament</title>
 </head>
 <body style="margin:0; background:#f6f7fb; font-family:Arial, sans-serif; color:#1f2937;">
-  <div style="max-width:1200px; margin:0 auto; padding:24px 16px 40px;">
+  <div style="max-width:1280px; margin:0 auto; padding:24px 16px 40px;">
 
     <h1 style="margin:0 0 20px; font-size:32px;">Playlist Tournament</h1>
 
     <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:16px; margin-bottom:16px;">
-      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom:14px;">
         <input
           id="playlistUrl"
           placeholder="Lien playlist Spotify"
@@ -21,14 +21,34 @@
         <button onclick="undoLastSelection()" id="undoButton" style="padding:12px 16px; font-size:16px; border:none; border-radius:10px; background:#e5e7eb; cursor:pointer;">Undo</button>
         <button onclick="resetTournament()" style="padding:12px 16px; font-size:16px; border:none; border-radius:10px; background:#e5e7eb; cursor:pointer;">Reset</button>
         <button onclick="reconnectSpotify()" style="padding:12px 16px; font-size:16px; border:none; border-radius:10px; background:#e5e7eb; cursor:pointer;">Reconnect Spotify</button>
-        <button onclick="toggleQualified()" id="toggleQualifiedButton" style="padding:12px 16px; font-size:16px; border:none; border-radius:10px; background:#e5e7eb; cursor:pointer;">Masquer qualifiés</button>
+        <button onclick="toggleQualified()" id="toggleQualifiedButton" style="padding:12px 16px; font-size:16px; border:none; border-radius:10px; background:#e5e7eb; cursor:pointer;">Masquer sélection</button>
       </div>
 
-      <div style="margin-top:16px; font-size:14px; color:#4b5563;">
-        Raccourcis :
-        <b>←</b> gauche,
-        <b>→</b> droite,
-        <b>Z</b> undo
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:16px; align-items:end;">
+        <div>
+          <div style="font-weight:bold; margin-bottom:8px;">Mode</div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button id="modeBracketButton" onclick="setMode('bracket')" style="padding:10px 14px; border:none; border-radius:10px; cursor:pointer;">Bracket tournament</button>
+            <button id="modeKeepOneButton" onclick="setMode('keep_one')" style="padding:10px 14px; border:none; border-radius:10px; cursor:pointer;">Keep one</button>
+          </div>
+        </div>
+
+        <div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <div style="font-weight:bold;">Musiques par versus</div>
+            <div id="groupSizeValue" style="color:#4b5563;">2</div>
+          </div>
+          <input id="groupSizeSlider" type="range" min="2" max="8" value="2" oninput="setGroupSize(this.value)" style="width:100%;">
+          <div style="display:flex; justify-content:space-between; font-size:12px; color:#6b7280;">
+            <span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span>
+          </div>
+        </div>
+
+        <div style="font-size:14px; color:#4b5563;">
+          Raccourcis :
+          <b>1-8</b> choisir la musique correspondante,
+          <b>Z</b> undo
+        </div>
       </div>
     </div>
 
@@ -57,7 +77,7 @@
 
       <div id="qualifiedPanel" style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:16px; height:fit-content;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-          <h2 style="margin:0; font-size:18px;">Qualifiés</h2>
+          <h2 id="qualifiedTitle" style="margin:0; font-size:18px;">Sélection du tour</h2>
           <span id="qualifiedCount" style="font-size:13px; color:#6b7280;">0</span>
         </div>
         <div id="qualifiedList" style="display:flex; flex-direction:column; gap:8px;"></div>
@@ -77,34 +97,35 @@ const STORAGE = {
   verifier: "spotify_pkce_verifier",
   playlistUrl: "spotify_playlist_url",
   pendingStart: "spotify_pending_start",
-  tournament: "spotify_tournament_state",
-  qualifiedVisible: "spotify_qualified_visible"
+  qualifiedVisible: "spotify_qualified_visible",
+  appSettings: "spotify_app_settings",
+  tournament: "spotify_tournament_state"
 };
 
 const state = {
   accessToken: null,
+  mode: "bracket",
+  groupSize: 2,
+  qualifiedVisible: true,
+
   currentRound: [],
   nextRound: [],
-  index: 0,
+  currentGroup: [],
+  currentGroupStartIndex: 0,
   roundNumber: 1,
-  roundByeTrack: null,
   lastUndoSnapshot: null,
   byeTimeout: null,
+
   totalTracks: 0,
-  qualifiedVisible: true,
-  currentLeftTrack: null,
-  currentRightTrack: null,
+  allTracks: [],
   matchHistory: [],
   roundEliminatedMap: {},
-  allTracks: [],
+  finalistsSummary: { winner: null, finalist: null, semifinalists: [], quarterfinalists: [] },
+
+  currentChoices: [],
   isFinished: false,
   winnerTrack: null,
-  finalistsSummary: {
-    winner: null,
-    finalist: null,
-    semifinalists: [],
-    quarterfinalists: []
-  }
+  keptTracks: []
 };
 
 // -------- DOM --------
@@ -216,6 +237,49 @@ function trackKey(track) {
   return track?.id || "";
 }
 
+// -------- SETTINGS --------
+function saveAppSettings() {
+  localStorage.setItem(STORAGE.appSettings, JSON.stringify({
+    mode: state.mode,
+    groupSize: state.groupSize
+  }));
+}
+
+function loadAppSettings() {
+  const raw = localStorage.getItem(STORAGE.appSettings);
+  if (!raw) return;
+  try {
+    const data = JSON.parse(raw);
+    if (data.mode === "bracket" || data.mode === "keep_one") state.mode = data.mode;
+    if (Number(data.groupSize) >= 2 && Number(data.groupSize) <= 8) state.groupSize = Number(data.groupSize);
+  } catch {}
+}
+
+function setMode(mode) {
+  state.mode = mode;
+  saveAppSettings();
+  updateModeButtons();
+  updateQualifiedTitle();
+}
+
+function setGroupSize(value) {
+  state.groupSize = Number(value);
+  $("groupSizeValue").textContent = `${state.groupSize}`;
+  saveAppSettings();
+}
+
+function updateModeButtons() {
+  const bracketActive = state.mode === "bracket";
+  $("modeBracketButton").style.background = bracketActive ? "#111827" : "#e5e7eb";
+  $("modeBracketButton").style.color = bracketActive ? "#fff" : "#111827";
+  $("modeKeepOneButton").style.background = !bracketActive ? "#111827" : "#e5e7eb";
+  $("modeKeepOneButton").style.color = !bracketActive ? "#fff" : "#111827";
+}
+
+function updateQualifiedTitle() {
+  $("qualifiedTitle").textContent = state.mode === "keep_one" ? "Musiques gardées" : "Sélection du tour";
+}
+
 // -------- STORAGE --------
 function savePlaylistUrl() {
   localStorage.setItem(STORAGE.playlistUrl, $("playlistUrl").value.trim());
@@ -249,18 +313,21 @@ function loadQualifiedVisibility() {
 function saveTournament() {
   try {
     localStorage.setItem(STORAGE.tournament, JSON.stringify({
+      mode: state.mode,
+      groupSize: state.groupSize,
       currentRound: state.currentRound,
       nextRound: state.nextRound,
-      index: state.index,
+      currentGroup: state.currentGroup,
+      currentGroupStartIndex: state.currentGroupStartIndex,
       roundNumber: state.roundNumber,
-      roundByeTrack: state.roundByeTrack,
       totalTracks: state.totalTracks,
+      allTracks: state.allTracks,
       matchHistory: state.matchHistory,
       roundEliminatedMap: state.roundEliminatedMap,
-      allTracks: state.allTracks,
+      finalistsSummary: state.finalistsSummary,
       isFinished: state.isFinished,
       winnerTrack: state.winnerTrack,
-      finalistsSummary: state.finalistsSummary
+      keptTracks: state.keptTracks
     }));
   } catch (error) {
     console.error("Erreur sauvegarde localStorage :", error);
@@ -273,27 +340,25 @@ function loadTournament() {
   if (!raw) return false;
 
   const data = JSON.parse(raw);
+  state.mode = data.mode || state.mode;
+  state.groupSize = Number(data.groupSize) || state.groupSize;
   state.currentRound = data.currentRound || [];
   state.nextRound = data.nextRound || [];
-  state.index = data.index || 0;
+  state.currentGroup = data.currentGroup || [];
+  state.currentGroupStartIndex = data.currentGroupStartIndex || 0;
   state.roundNumber = data.roundNumber || 1;
-  state.roundByeTrack = data.roundByeTrack || null;
   state.totalTracks = data.totalTracks || 0;
+  state.allTracks = data.allTracks || [];
   state.matchHistory = data.matchHistory || [];
   state.roundEliminatedMap = data.roundEliminatedMap || {};
-  state.allTracks = data.allTracks || [];
+  state.finalistsSummary = data.finalistsSummary || { winner: null, finalist: null, semifinalists: [], quarterfinalists: [] };
   state.isFinished = !!data.isFinished;
   state.winnerTrack = data.winnerTrack || null;
-  state.finalistsSummary = data.finalistsSummary || {
-    winner: null,
-    finalist: null,
-    semifinalists: [],
-    quarterfinalists: []
-  };
+  state.keptTracks = data.keptTracks || [];
   state.lastUndoSnapshot = null;
   updateUndoButton();
 
-  return state.currentRound.length > 0 || state.nextRound.length > 0 || state.isFinished;
+  return state.currentRound.length > 0 || state.nextRound.length > 0 || state.isFinished || state.keptTracks.length > 0;
 }
 
 function clearTournament() {
@@ -433,18 +498,18 @@ async function getAllTracks(playlistId) {
 function resetTournamentData() {
   state.currentRound = [];
   state.nextRound = [];
-  state.index = 0;
+  state.currentGroup = [];
+  state.currentGroupStartIndex = 0;
   state.roundNumber = 1;
-  state.roundByeTrack = null;
   state.lastUndoSnapshot = null;
   state.totalTracks = 0;
-  state.currentLeftTrack = null;
-  state.currentRightTrack = null;
+  state.currentChoices = [];
   state.matchHistory = [];
   state.roundEliminatedMap = {};
   state.allTracks = [];
   state.isFinished = false;
   state.winnerTrack = null;
+  state.keptTracks = [];
   state.finalistsSummary = {
     winner: null,
     finalist: null,
@@ -454,28 +519,32 @@ function resetTournamentData() {
   updateUndoButton();
 }
 
-function prepareRound() {
-  state.roundByeTrack = null;
+function createGroupsForRound() {
+  const start = state.currentGroupStartIndex;
+  if (start >= state.currentRound.length) return null;
 
-  if (state.currentRound.length > 1 && state.currentRound.length % 2 === 1) {
-    const byeIndex = Math.floor(Math.random() * state.currentRound.length);
-    state.roundByeTrack = state.currentRound[byeIndex];
-    state.currentRound.splice(byeIndex, 1);
-    state.currentRound.push(state.roundByeTrack);
+  const remaining = state.currentRound.length - start;
+
+  if (remaining === 1) {
+    return [state.currentRound[start]];
   }
+
+  const size = Math.min(state.groupSize, remaining);
+  return state.currentRound.slice(start, start + size);
 }
 
 function createUndoSnapshot() {
   return {
     currentRound: [...state.currentRound],
     nextRound: [...state.nextRound],
-    index: state.index,
+    currentGroup: [...state.currentGroup],
+    currentGroupStartIndex: state.currentGroupStartIndex,
     roundNumber: state.roundNumber,
-    roundByeTrack: state.roundByeTrack,
     matchHistory: [...state.matchHistory],
     roundEliminatedMap: { ...state.roundEliminatedMap },
     isFinished: state.isFinished,
     winnerTrack: state.winnerTrack,
+    keptTracks: [...state.keptTracks],
     finalistsSummary: {
       winner: state.finalistsSummary.winner,
       finalist: state.finalistsSummary.finalist,
@@ -491,13 +560,14 @@ function undoLastSelection() {
 
   state.currentRound = [...state.lastUndoSnapshot.currentRound];
   state.nextRound = [...state.lastUndoSnapshot.nextRound];
-  state.index = state.lastUndoSnapshot.index;
+  state.currentGroup = [...state.lastUndoSnapshot.currentGroup];
+  state.currentGroupStartIndex = state.lastUndoSnapshot.currentGroupStartIndex;
   state.roundNumber = state.lastUndoSnapshot.roundNumber;
-  state.roundByeTrack = state.lastUndoSnapshot.roundByeTrack || null;
   state.matchHistory = [...state.lastUndoSnapshot.matchHistory];
   state.roundEliminatedMap = { ...state.lastUndoSnapshot.roundEliminatedMap };
   state.isFinished = state.lastUndoSnapshot.isFinished;
   state.winnerTrack = state.lastUndoSnapshot.winnerTrack || null;
+  state.keptTracks = [...state.lastUndoSnapshot.keptTracks];
   state.finalistsSummary = {
     winner: state.lastUndoSnapshot.finalistsSummary.winner,
     finalist: state.lastUndoSnapshot.finalistsSummary.finalist,
@@ -508,37 +578,31 @@ function undoLastSelection() {
 
   saveTournament();
   updateUndoButton();
-  showMatch();
+  showCurrentStep();
 }
 
-function registerMatchResult(winner, loser) {
+function registerGroupSelection(winner, losers, isBye = false) {
   const winnerId = trackKey(winner);
-  const loserId = trackKey(loser);
+
+  if (isBye) {
+    state.matchHistory.push({
+      round: state.roundNumber,
+      winnerId,
+      loserIds: [],
+      isBye: true
+    });
+    return;
+  }
 
   state.matchHistory.push({
     round: state.roundNumber,
     winnerId,
-    loserId,
-    winnerName: winner.name,
-    loserName: loser.name,
-    loserArtists: getArtistNames(loser),
+    loserIds: losers.map(trackKey),
     isBye: false
   });
 
-  state.roundEliminatedMap[loserId] = state.roundNumber;
-}
-
-function registerBye(track) {
-  const id = trackKey(track);
-
-  state.matchHistory.push({
-    round: state.roundNumber,
-    winnerId: id,
-    loserId: null,
-    winnerName: track.name,
-    loserName: null,
-    loserArtists: null,
-    isBye: true
+  losers.forEach(loser => {
+    state.roundEliminatedMap[trackKey(loser)] = state.roundNumber;
   });
 }
 
@@ -547,28 +611,22 @@ function findTrackById(trackId) {
 }
 
 function buildFinalistsSummary(winner) {
-  const entries = Object.entries(state.roundEliminatedMap)
-    .sort((a, b) => b[1] - a[1]);
+  const roundGroups = {};
+  Object.entries(state.roundEliminatedMap).forEach(([trackId, round]) => {
+    if (!roundGroups[round]) roundGroups[round] = [];
+    roundGroups[round].push(findTrackById(trackId));
+  });
 
-  const finalist = entries[0] ? findTrackById(entries[0][0]) : null;
-
-  const semifinalists = entries
-    .filter(([, round]) => finalist ? round === state.roundEliminatedMap[trackKey(finalist)] - 1 : false)
-    .map(([trackId]) => findTrackById(trackId))
-    .filter(Boolean)
-    .slice(0, 2);
-
-  const quarterfinalists = entries
-    .filter(([, round]) => semifinalists.length ? round === (state.roundEliminatedMap[trackKey(semifinalists[0])] - 1) : false)
-    .map(([trackId]) => findTrackById(trackId))
-    .filter(Boolean)
-    .slice(0, 4);
+  const rounds = Object.keys(roundGroups).map(Number).sort((a, b) => b - a);
+  const finalistRound = rounds[0];
+  const semifinalRound = rounds[1];
+  const quarterRound = rounds[2];
 
   state.finalistsSummary = {
     winner,
-    finalist,
-    semifinalists,
-    quarterfinalists
+    finalist: finalistRound ? (roundGroups[finalistRound] || []).filter(Boolean)[0] || null : null,
+    semifinalists: semifinalRound ? (roundGroups[semifinalRound] || []).filter(Boolean).slice(0, 2) : [],
+    quarterfinalists: quarterRound ? (roundGroups[quarterRound] || []).filter(Boolean).slice(0, 4) : []
   };
 }
 
@@ -586,60 +644,140 @@ function getWinnerPath(winner) {
         };
       }
 
+      const losers = item.loserIds.map(findTrackById).filter(Boolean);
       return {
         round: item.round,
-        text: `${item.loserName} — ${item.loserArtists}`
+        text: losers.map(track => `${track.name} — ${getArtistNames(track)}`).join(" | ")
       };
     });
 }
 
-function vote(choice) {
+function chooseTrack(choiceIndex) {
   stopByeTimeout();
 
   state.lastUndoSnapshot = createUndoSnapshot();
   updateUndoButton();
 
-  const winner = state.currentRound[state.index + choice];
-  const loser = state.currentRound[state.index + (choice === 0 ? 1 : 0)];
+  const winner = state.currentGroup[choiceIndex];
+  const losers = state.currentGroup.filter((_, i) => i !== choiceIndex);
 
-  registerMatchResult(winner, loser);
-
+  registerGroupSelection(winner, losers, false);
   state.nextRound.push(winner);
-  state.index += 2;
 
+  state.currentGroupStartIndex += state.currentGroup.length;
   saveTournament();
-  showMatch();
+  showCurrentStep();
 }
 
-function resetTournament() {
-  stopByeTimeout();
-  clearTournament();
-  clearPendingStart();
-  state.accessToken = null;
-  resetTournamentData();
-  setApp("");
+function processBye(track) {
+  registerGroupSelection(track, [], true);
+  state.nextRound.push(track);
+  state.currentGroupStartIndex += 1;
+  saveTournament();
+}
+
+function finalizeKeepOne() {
+  state.keptTracks = [...state.nextRound];
+  state.isFinished = true;
   updateDashboard();
-  renderQualifiedList();
-  setStatus("Tournoi réinitialisé.");
+  saveTournament();
+  showKeepOneSummary();
 }
 
-function toggleQualified() {
-  state.qualifiedVisible = !state.qualifiedVisible;
-  saveQualifiedVisibility();
-  renderQualifiedPanelState();
+function finalizeBracket() {
+  if (state.nextRound.length === 1) {
+    const winner = state.nextRound[0];
+    state.isFinished = true;
+    state.winnerTrack = winner;
+    buildFinalistsSummary(winner);
+    updateDashboard();
+    saveTournament();
+    showWinner(winner);
+    return;
+  }
+
+  state.currentRound = [...state.nextRound];
+  state.nextRound = [];
+  state.currentGroupStartIndex = 0;
+  state.currentGroup = [];
+  state.roundNumber += 1;
+  saveTournament();
+  showCurrentStep();
+}
+
+function moveToNextStep() {
+  if (state.mode === "keep_one") {
+    const nextGroup = createGroupsForRound();
+
+    if (!nextGroup) {
+      finalizeKeepOne();
+      return;
+    }
+
+    state.currentGroup = nextGroup;
+
+    if (nextGroup.length === 1) {
+      setStatus("");
+      setApp(`
+        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:24px;">
+          <p style="margin:0; font-size:20px;"><b>${escapeHtml(nextGroup[0].name)}</b> est gardée automatiquement.</p>
+        </div>
+      `);
+
+      processBye(nextGroup[0]);
+      renderQualifiedList();
+
+      state.byeTimeout = setTimeout(() => {
+        showCurrentStep();
+      }, CONFIG.byeDelay);
+      return;
+    }
+
+    renderGroupSelection();
+    return;
+  }
+
+  const nextGroup = createGroupsForRound();
+
+  if (!nextGroup) {
+    finalizeBracket();
+    return;
+  }
+
+  state.currentGroup = nextGroup;
+
+  if (nextGroup.length === 1) {
+    setStatus("");
+    setApp(`
+      <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:24px;">
+        <p style="margin:0; font-size:20px;"><b>${escapeHtml(nextGroup[0].name)}</b> passe automatiquement au tour suivant.</p>
+      </div>
+    `);
+
+    processBye(nextGroup[0]);
+    renderQualifiedList();
+
+    state.byeTimeout = setTimeout(() => {
+      showCurrentStep();
+    }, CONFIG.byeDelay);
+    return;
+  }
+
+  renderGroupSelection();
 }
 
 // -------- RENDER --------
-function renderTrack(track, side, options = {}) {
+function renderTrack(track, index = null, options = {}) {
   const imageUrl = track.album?.images?.[0]?.url || "";
   const artists = getArtistNames(track);
   const spotifyUrl = track.external_urls?.spotify || "#";
   const showChoose = options.showChoose !== false;
+  const choiceLabel = index !== null ? `<div style="display:inline-block; margin-bottom:10px; padding:4px 10px; background:#111827; color:#fff; border-radius:999px; font-size:12px; font-weight:bold;">Touche ${index + 1}</div>` : "";
 
   return `
     <div style="
       flex:1;
-      min-width:280px;
+      min-width:260px;
       text-align:center;
       background:#fff;
       border:1px solid #e5e7eb;
@@ -648,13 +786,14 @@ function renderTrack(track, side, options = {}) {
       box-sizing:border-box;
       box-shadow:0 6px 16px rgba(0,0,0,0.04);
     ">
+      ${choiceLabel}
       ${imageUrl ? `<a href="${spotifyUrl}" target="_blank" rel="noopener noreferrer"><img src="${imageUrl}" alt="${escapeHtml(track.name)}" width="220" style="width:100%; max-width:220px; border-radius:12px;"></a><br><br>` : ""}
       <div style="font-size:20px; font-weight:bold; margin-bottom:8px;">${escapeHtml(track.name)}</div>
       <div style="margin-bottom:14px; color:#4b5563;">${escapeHtml(artists)}</div>
 
       ${showChoose ? `
         <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
-          <button onclick="vote(${side})" style="padding:12px 18px; font-size:16px; border:none; border-radius:10px; background:#111827; color:#fff; cursor:pointer;">Choisir</button>
+          <button onclick="chooseTrack(${index})" style="padding:12px 18px; font-size:16px; border:none; border-radius:10px; background:#111827; color:#fff; cursor:pointer;">Garder</button>
         </div>
       ` : ""}
 
@@ -664,28 +803,6 @@ function renderTrack(track, side, options = {}) {
       <div style="font-size:13px; color:#6b7280; margin-top:4px;">
         Durée : ${escapeHtml(formatDuration(track.duration_ms))}${track.popularity !== null ? ` · Popularité : ${track.popularity}` : ""}${track.explicit ? " · Explicit" : ""}
       </div>
-    </div>
-  `;
-}
-
-function renderBye(track) {
-  const imageUrl = track.album?.images?.[0]?.url || "";
-  const artists = getArtistNames(track);
-
-  return `
-    <div style="
-      background:#fff;
-      border:1px dashed #cbd5e1;
-      border-radius:16px;
-      padding:12px;
-      text-align:center;
-      font-size:12px;
-      opacity:0.85;
-    ">
-      <div style="font-size:11px; font-weight:bold; margin-bottom:8px;">BYE DU TOUR</div>
-      ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(track.name)}" width="72" style="border-radius:8px;"><br><br>` : ""}
-      <div style="font-weight:bold; margin-bottom:4px;">${escapeHtml(track.name)}</div>
-      <div style="color:#6b7280;">${escapeHtml(artists)}</div>
     </div>
   `;
 }
@@ -708,20 +825,20 @@ function renderMiniTrack(track, label = "") {
 
 function renderQualifiedList() {
   const list = $("qualifiedList");
-  const qualified = state.nextRound || [];
-  $("qualifiedCount").textContent = `${qualified.length}`;
+  const items = state.mode === "keep_one" && state.isFinished ? state.keptTracks : state.nextRound;
+  $("qualifiedCount").textContent = `${items.length}`;
 
   if (!state.qualifiedVisible) {
     list.innerHTML = "";
     return;
   }
 
-  if (qualified.length === 0) {
-    list.innerHTML = `<div style="font-size:14px; color:#6b7280;">Aucun morceau qualifié pour le moment.</div>`;
+  if (items.length === 0) {
+    list.innerHTML = `<div style="font-size:14px; color:#6b7280;">Aucune musique pour le moment.</div>`;
     return;
   }
 
-  list.innerHTML = qualified.map((track, index) => `
+  list.innerHTML = items.map((track, index) => `
     <div style="display:flex; gap:10px; align-items:center; padding:8px; border:1px solid #f1f5f9; border-radius:10px;">
       <div style="width:24px; font-size:12px; color:#6b7280;">${index + 1}</div>
       <div style="width:40px;">
@@ -737,34 +854,70 @@ function renderQualifiedList() {
 
 function renderQualifiedPanelState() {
   $("qualifiedPanel").style.display = state.qualifiedVisible ? "block" : "none";
-  $("toggleQualifiedButton").textContent = state.qualifiedVisible ? "Masquer qualifiés" : "Afficher qualifiés";
+  $("toggleQualifiedButton").textContent = state.qualifiedVisible ? "Masquer sélection" : "Afficher sélection";
+  updateQualifiedTitle();
   renderQualifiedList();
 }
 
 function updateDashboard() {
-  const active = state.currentRound.length > 0 || state.nextRound.length > 0 || state.isFinished;
+  const active = state.currentRound.length > 0 || state.nextRound.length > 0 || state.isFinished || state.keptTracks.length > 0;
   $("dashboard").style.display = active ? "flex" : "none";
   if (!active) return;
 
-  const totalMatches = Math.max(0, state.totalTracks - 1);
-  const completedMatches = state.matchHistory.filter(item => !item.isBye).length;
-  const progressPercent = totalMatches > 0 ? (completedMatches / totalMatches) * 100 : 0;
+  const totalSelections = state.mode === "bracket"
+    ? Math.max(0, state.totalTracks - 1)
+    : Math.ceil(state.totalTracks / state.groupSize);
+
+  const completedSelections = state.matchHistory.filter(item => !item.isBye).length;
+  const progressPercent = totalSelections > 0 ? (completedSelections / totalSelections) * 100 : 0;
 
   let remainingInCurrentRound = 0;
   let totalInCurrentRound = 0;
 
   if (!state.isFinished) {
-    remainingInCurrentRound = Math.max(0, Math.floor((state.currentRound.length - state.index) / 2));
-    totalInCurrentRound = Math.floor(state.currentRound.length / 2);
+    totalInCurrentRound = Math.ceil(state.currentRound.length / state.groupSize);
+    const processedGroups = Math.floor(state.currentGroupStartIndex / state.groupSize);
+    remainingInCurrentRound = Math.max(0, totalInCurrentRound - processedGroups - (state.currentGroup.length ? 0 : 0));
+    if (state.currentGroup.length) {
+      const currentIsOnlyBye = state.currentGroup.length === 1;
+      remainingInCurrentRound = Math.max(0, remainingInCurrentRound);
+      if (currentIsOnlyBye) {
+        // leave count as current group included before auto-step
+      }
+    }
   }
 
   $("progressBar").style.width = `${Math.min(100, progressPercent)}%`;
-  $("progressText").textContent = `Progression : ${completedMatches} / ${totalMatches} matchs`;
-  $("roundInfo").textContent = state.isFinished ? "Terminé" : `Tour ${state.roundNumber}`;
-  $("globalMatchesInfo").textContent = `${Math.max(0, totalMatches - completedMatches)} matchs restants au total`;
+  $("progressText").textContent = state.mode === "bracket"
+    ? `Progression : ${completedSelections} / ${totalSelections} sélections`
+    : `Progression : ${completedSelections} / ${totalSelections} groupes`;
+
+  $("roundInfo").textContent = state.isFinished
+    ? "Terminé"
+    : (state.mode === "bracket" ? `Tour ${state.roundNumber}` : "Round unique");
+
+  $("globalMatchesInfo").textContent = `${Math.max(0, totalSelections - completedSelections)} restants au total`;
   $("roundMatchesInfo").textContent = state.isFinished
-    ? `0 / 0 matchs restants dans ce tour`
-    : `${remainingInCurrentRound} / ${totalInCurrentRound} matchs restants dans ce tour`;
+    ? `0 / 0 restants`
+    : `${Math.max(0, Math.ceil((state.currentRound.length - state.currentGroupStartIndex) / state.groupSize))} / ${Math.ceil(state.currentRound.length / state.groupSize)} restants dans ce tour`;
+}
+
+function renderWinnerPath(winner) {
+  const path = getWinnerPath(winner);
+
+  return `
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:20px; margin-top:16px;">
+      <h2 style="margin-top:0;">Parcours du top 1</h2>
+      <div style="display:grid; gap:10px;">
+        ${path.length ? path.map(step => `
+          <div style="padding:12px; border:1px solid #f1f5f9; border-radius:12px;">
+            <div style="font-weight:bold; margin-bottom:4px;">Tour ${step.round}</div>
+            <div style="color:#4b5563;">${escapeHtml(step.text)}</div>
+          </div>
+        `).join("") : `<div style="color:#6b7280;">Aucun parcours disponible.</div>`}
+      </div>
+    </div>
+  `;
 }
 
 function renderFinalStages() {
@@ -798,32 +951,45 @@ function renderFinalStages() {
   `;
 }
 
-function renderWinnerPath(winner) {
-  const path = getWinnerPath(winner);
-
+function renderKeepOneSummary() {
   return `
-    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:20px; margin-top:16px;">
-      <h2 style="margin-top:0;">Parcours du top 1</h2>
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:20px;">
+      <h2 style="margin-top:0;">Récapitulatif des musiques gardées</h2>
       <div style="display:grid; gap:10px;">
-        ${path.length ? path.map(step => `
-          <div style="padding:12px; border:1px solid #f1f5f9; border-radius:12px;">
-            <div style="font-weight:bold; margin-bottom:4px;">Tour ${step.round}</div>
-            <div style="color:#4b5563;">${escapeHtml(step.text)}</div>
-          </div>
-        `).join("") : `<div style="color:#6b7280;">Aucun parcours disponible.</div>`}
+        ${state.keptTracks.map(track => renderMiniTrack(track)).join("")}
       </div>
     </div>
   `;
 }
 
-function showWinner(track) {
-  setStatus("");
-  state.currentLeftTrack = track;
-  state.currentRightTrack = null;
-  state.isFinished = true;
-  state.winnerTrack = track;
+function renderGroupSelection() {
+  updateDashboard();
+  renderQualifiedList();
 
-  buildFinalistsSummary(track);
+  setStatus("");
+  setApp(`
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:18px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:16px;">
+        <div>
+          <b>${state.mode === "bracket" ? `Tour ${state.roundNumber}` : "Keep one"} — Groupe de ${state.currentGroup.length} musiques</b>
+        </div>
+        <div style="font-size:14px; color:#6b7280;">
+          Choisis 1 musique à garder
+        </div>
+      </div>
+
+      <div style="display:flex; gap:12px; flex-wrap:wrap;">
+        ${state.currentGroup.map((track, index) => renderTrack(track, index)).join("")}
+      </div>
+    </div>
+  `);
+}
+
+function showWinner(winner) {
+  setStatus("");
+  state.isFinished = true;
+  state.winnerTrack = winner;
+  buildFinalistsSummary(winner);
   updateDashboard();
   saveTournament();
 
@@ -832,89 +998,37 @@ function showWinner(track) {
       <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:20px;">
         <h2 style="margin-top:0;">Gagnant</h2>
         <div style="max-width:480px;">
-          ${renderTrack(track, 0, { showChoose: false })}
+          ${renderTrack(winner, null, { showChoose: false })}
         </div>
       </div>
 
-      ${renderWinnerPath(track)}
+      ${renderWinnerPath(winner)}
       ${renderFinalStages()}
     </div>
   `);
 }
 
-function showMatch() {
+function showKeepOneSummary() {
+  updateDashboard();
+  renderQualifiedList();
+  setStatus("");
+  setApp(renderKeepOneSummary());
+}
+
+function showCurrentStep() {
   stopByeTimeout();
   updateUndoButton();
 
-  if (state.index >= state.currentRound.length) {
-    if (state.nextRound.length === 1) {
-      const winner = state.nextRound[0];
-      state.lastUndoSnapshot = null;
-      updateUndoButton();
-      renderQualifiedList();
-      showWinner(winner);
-      return;
+  if (state.isFinished) {
+    if (state.mode === "keep_one") {
+      showKeepOneSummary();
+    } else if (state.winnerTrack) {
+      showWinner(state.winnerTrack);
     }
-
-    state.currentRound = [...state.nextRound];
-    state.nextRound = [];
-    state.index = 0;
-    state.roundNumber += 1;
-    prepareRound();
-    saveTournament();
-  }
-
-  const a = state.currentRound[state.index];
-  const b = state.currentRound[state.index + 1];
-  state.currentLeftTrack = a || null;
-  state.currentRightTrack = b || null;
-
-  updateDashboard();
-  renderQualifiedList();
-
-  if (!b) {
-    setStatus("");
-    setApp(`
-      <div style="display:grid; grid-template-columns:240px minmax(0,1fr); gap:16px;">
-        ${renderBye(a)}
-        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:24px;">
-          <p style="margin:0; font-size:20px;"><b>${escapeHtml(a.name)}</b> passe automatiquement au tour suivant.</p>
-        </div>
-      </div>
-    `);
-
-    registerBye(a);
-
-    state.nextRound.push(a);
-    state.index += 2;
-    saveTournament();
-    renderQualifiedList();
-
-    state.byeTimeout = setTimeout(showMatch, CONFIG.byeDelay);
     return;
   }
 
-  setStatus("");
-  setApp(`
-    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:18px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:16px;">
-        <div><b>Tour ${state.roundNumber} — Match ${Math.floor(state.index / 2) + 1}</b></div>
-        <div style="font-size:14px; color:#6b7280;">${state.roundByeTrack ? "Un bye est attribué ce tour" : "Aucun bye ce tour"}</div>
-      </div>
-
-      <div style="display:grid; grid-template-columns:220px minmax(0,1fr); gap:16px;">
-        <div>
-          ${state.roundByeTrack ? renderBye(state.roundByeTrack) : ""}
-        </div>
-        <div style="display:flex; gap:12px; flex-wrap:wrap;">
-          ${renderTrack(a, 0)}
-          ${renderTrack(b, 1)}
-        </div>
-      </div>
-    </div>
-  `);
-
-  saveTournament();
+  moveToNextStep();
 }
 
 // -------- FLOW --------
@@ -951,15 +1065,15 @@ async function start() {
     shuffle(tracks);
 
     resetTournamentData();
-    state.currentRound = tracks;
+    state.currentRound = [...tracks];
     state.allTracks = [...tracks];
     state.totalTracks = tracks.length;
-    prepareRound();
+    state.currentGroupStartIndex = 0;
+    state.currentGroup = [];
 
     saveTournament();
-    renderQualifiedList();
     renderQualifiedPanelState();
-    showMatch();
+    showCurrentStep();
   } catch (error) {
     console.error(error);
 
@@ -979,6 +1093,11 @@ async function init() {
   try {
     restorePlaylistUrl();
     loadQualifiedVisibility();
+    loadAppSettings();
+
+    $("groupSizeSlider").value = String(state.groupSize);
+    $("groupSizeValue").textContent = String(state.groupSize);
+    updateModeButtons();
     renderQualifiedPanelState();
 
     const code = getQueryParam("code");
@@ -988,14 +1107,11 @@ async function init() {
     }
 
     if (loadTournament()) {
+      $("groupSizeSlider").value = String(state.groupSize);
+      $("groupSizeValue").textContent = String(state.groupSize);
+      updateModeButtons();
       renderQualifiedPanelState();
-
-      if (state.isFinished && state.winnerTrack) {
-        showWinner(state.winnerTrack);
-        return;
-      }
-
-      showMatch();
+      showCurrentStep();
       return;
     }
 
@@ -1023,19 +1139,19 @@ document.addEventListener("keydown", (event) => {
   const isTyping = tag === "input" || tag === "textarea";
   if (isTyping) return;
 
-  if (event.key === "ArrowLeft" && state.currentLeftTrack && state.currentRightTrack) {
-    event.preventDefault();
-    vote(0);
-  }
-
-  if (event.key === "ArrowRight" && state.currentLeftTrack && state.currentRightTrack) {
-    event.preventDefault();
-    vote(1);
-  }
-
   if (event.key.toLowerCase() === "z") {
     event.preventDefault();
     undoLastSelection();
+    return;
+  }
+
+  const num = Number(event.key);
+  if (num >= 1 && num <= 8) {
+    const index = num - 1;
+    if (state.currentGroup[index]) {
+      event.preventDefault();
+      chooseTrack(index);
+    }
   }
 });
 </script>
