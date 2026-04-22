@@ -68,6 +68,11 @@ function escapeHtml(str) {
     .replaceAll("'", "&#039;");
 }
 
+function clearExpiredToken() {
+  accessToken = null;
+  localStorage.removeItem(STORAGE_KEYS.accessToken);
+}
+
 function savePlaylistUrl() {
   const value = document.getElementById("playlistUrl").value.trim();
   localStorage.setItem(STORAGE_KEYS.playlistUrl, value);
@@ -223,40 +228,53 @@ function getPlaylistId(url) {
   return match ? match[1] : null;
 }
 
-async function getPlaylistMeta(playlistId, token) {
-  const url = `https://api.spotify.com/v1/playlists/${playlistId}?fields=name,tracks(total),owner(display_name,id),public,collaborative`;
+async function spotifyApiFetch(url) {
+  if (!accessToken) {
+    const savedToken = localStorage.getItem(STORAGE_KEYS.accessToken);
+    if (savedToken) {
+      accessToken = savedToken;
+    }
+  }
+
   const res = await fetch(url, {
-    headers: { Authorization: "Bearer " + token }
+    headers: {
+      Authorization: "Bearer " + accessToken
+    }
   });
 
   const data = await res.json();
 
   if (!res.ok) {
-    throw new Error(data.error?.message || "Impossible de lire les infos de playlist");
+    const message = data.error?.message || "Erreur API Spotify";
+
+    if (
+      res.status === 401 ||
+      message.toLowerCase().includes("token expired") ||
+      message.toLowerCase().includes("access token expired")
+    ) {
+      clearExpiredToken();
+      throw new Error("TOKEN_EXPIRED");
+    }
+
+    throw new Error(message);
   }
 
   return data;
 }
 
-async function getAllTracks(playlistId, token) {
+async function getPlaylistMeta(playlistId) {
+  const url = `https://api.spotify.com/v1/playlists/${playlistId}?fields=name,tracks(total),owner(display_name,id),public,collaborative`;
+  return await spotifyApiFetch(url);
+}
+
+async function getAllTracks(playlistId) {
   let tracks = [];
   let offset = 0;
   let total = null;
 
   while (true) {
     const url = `https://api.spotify.com/v1/playlists/${playlistId}/items?limit=50&offset=${offset}&additional_types=track`;
-
-    const res = await fetch(url, {
-      headers: {
-        Authorization: "Bearer " + token
-      }
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      throw new Error(data.error?.message || "Erreur API Spotify");
-    }
+    const data = await spotifyApiFetch(url);
 
     if (total === null) {
       total = data.total ?? 0;
@@ -299,23 +317,6 @@ function prepareRound() {
 }
 
 // -------- HISTORY --------
-function createSnapshot() {
-  return {
-    currentRound: [...currentRound],
-    nextRound: [...nextRound],
-    index,
-    roundNumber,
-    roundByeTrack,
-    historyStack: historyStack.map(snapshot => ({
-      currentRound: [...snapshot.currentRound],
-      nextRound: [...snapshot.nextRound],
-      index: snapshot.index,
-      roundNumber: snapshot.roundNumber,
-      roundByeTrack: snapshot.roundByeTrack
-    }))
-  };
-}
-
 function pushHistorySnapshot() {
   historyStack.push({
     currentRound: [...currentRound],
@@ -545,6 +546,7 @@ function resetTournament() {
 
   clearState();
   clearPendingStart();
+  clearExpiredToken();
   currentRound = [];
   nextRound = [];
   index = 0;
@@ -593,10 +595,10 @@ async function start() {
       return;
     }
 
-    const meta = await getPlaylistMeta(playlistId, accessToken);
+    const meta = await getPlaylistMeta(playlistId);
     setStatus(`Lecture de la playlist "${meta.name}"... ${meta.tracks?.total ?? 0} éléments annoncés.`);
 
-    const result = await getAllTracks(playlistId, accessToken);
+    const result = await getAllTracks(playlistId);
     const tracks = result.tracks;
 
     if (tracks.length === 0) {
@@ -617,6 +619,14 @@ async function start() {
     showMatch();
   } catch (error) {
     console.error(error);
+
+    if (error.message === "TOKEN_EXPIRED") {
+      setStatus("Session expirée, reconnexion Spotify...");
+      savePendingStart(true);
+      await redirectToAuth();
+      return;
+    }
+
     setError(error.message || "Erreur inconnue.");
   }
 }
