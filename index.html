@@ -94,12 +94,17 @@ const state = {
   qualifiedVisible: true,
   currentLeftTrack: null,
   currentRightTrack: null,
-  finalRanking: [],
   matchHistory: [],
   roundEliminatedMap: {},
   allTracks: [],
   isFinished: false,
-  winnerTrack: null
+  winnerTrack: null,
+  finalistsSummary: {
+    winner: null,
+    finalist: null,
+    semifinalists: [],
+    quarterfinalists: []
+  }
 };
 
 // -------- DOM --------
@@ -250,12 +255,12 @@ function saveTournament() {
       roundNumber: state.roundNumber,
       roundByeTrack: state.roundByeTrack,
       totalTracks: state.totalTracks,
-      finalRanking: state.finalRanking,
       matchHistory: state.matchHistory,
       roundEliminatedMap: state.roundEliminatedMap,
       allTracks: state.allTracks,
       isFinished: state.isFinished,
-      winnerTrack: state.winnerTrack
+      winnerTrack: state.winnerTrack,
+      finalistsSummary: state.finalistsSummary
     }));
   } catch (error) {
     console.error("Erreur sauvegarde localStorage :", error);
@@ -274,12 +279,17 @@ function loadTournament() {
   state.roundNumber = data.roundNumber || 1;
   state.roundByeTrack = data.roundByeTrack || null;
   state.totalTracks = data.totalTracks || 0;
-  state.finalRanking = data.finalRanking || [];
   state.matchHistory = data.matchHistory || [];
   state.roundEliminatedMap = data.roundEliminatedMap || {};
   state.allTracks = data.allTracks || [];
   state.isFinished = !!data.isFinished;
   state.winnerTrack = data.winnerTrack || null;
+  state.finalistsSummary = data.finalistsSummary || {
+    winner: null,
+    finalist: null,
+    semifinalists: [],
+    quarterfinalists: []
+  };
   state.lastUndoSnapshot = null;
   updateUndoButton();
 
@@ -430,12 +440,17 @@ function resetTournamentData() {
   state.totalTracks = 0;
   state.currentLeftTrack = null;
   state.currentRightTrack = null;
-  state.finalRanking = [];
   state.matchHistory = [];
   state.roundEliminatedMap = {};
   state.allTracks = [];
   state.isFinished = false;
   state.winnerTrack = null;
+  state.finalistsSummary = {
+    winner: null,
+    finalist: null,
+    semifinalists: [],
+    quarterfinalists: []
+  };
   updateUndoButton();
 }
 
@@ -457,11 +472,16 @@ function createUndoSnapshot() {
     index: state.index,
     roundNumber: state.roundNumber,
     roundByeTrack: state.roundByeTrack,
-    finalRanking: [...state.finalRanking],
     matchHistory: [...state.matchHistory],
     roundEliminatedMap: { ...state.roundEliminatedMap },
     isFinished: state.isFinished,
-    winnerTrack: state.winnerTrack
+    winnerTrack: state.winnerTrack,
+    finalistsSummary: {
+      winner: state.finalistsSummary.winner,
+      finalist: state.finalistsSummary.finalist,
+      semifinalists: [...state.finalistsSummary.semifinalists],
+      quarterfinalists: [...state.finalistsSummary.quarterfinalists]
+    }
   };
 }
 
@@ -474,11 +494,16 @@ function undoLastSelection() {
   state.index = state.lastUndoSnapshot.index;
   state.roundNumber = state.lastUndoSnapshot.roundNumber;
   state.roundByeTrack = state.lastUndoSnapshot.roundByeTrack || null;
-  state.finalRanking = [...state.lastUndoSnapshot.finalRanking];
   state.matchHistory = [...state.lastUndoSnapshot.matchHistory];
   state.roundEliminatedMap = { ...state.lastUndoSnapshot.roundEliminatedMap };
   state.isFinished = state.lastUndoSnapshot.isFinished;
   state.winnerTrack = state.lastUndoSnapshot.winnerTrack || null;
+  state.finalistsSummary = {
+    winner: state.lastUndoSnapshot.finalistsSummary.winner,
+    finalist: state.lastUndoSnapshot.finalistsSummary.finalist,
+    semifinalists: [...state.lastUndoSnapshot.finalistsSummary.semifinalists],
+    quarterfinalists: [...state.lastUndoSnapshot.finalistsSummary.quarterfinalists]
+  };
   state.lastUndoSnapshot = null;
 
   saveTournament();
@@ -521,24 +546,30 @@ function findTrackById(trackId) {
   return state.allTracks.find(track => trackKey(track) === trackId) || null;
 }
 
-function buildFinalRanking(winner) {
-  const winnerId = trackKey(winner);
-  const used = new Set([winnerId]);
-  const ranked = [winner];
-
+function buildFinalistsSummary(winner) {
   const entries = Object.entries(state.roundEliminatedMap)
     .sort((a, b) => b[1] - a[1]);
 
-  for (const [trackId] of entries) {
-    const track = findTrackById(trackId);
-    if (track && !used.has(trackId)) {
-      ranked.push(track);
-      used.add(trackId);
-    }
-    if (ranked.length >= 8) break;
-  }
+  const finalist = entries[0] ? findTrackById(entries[0][0]) : null;
 
-  state.finalRanking = ranked.slice(0, 8);
+  const semifinalists = entries
+    .filter(([, round]) => finalist ? round === state.roundEliminatedMap[trackKey(finalist)] - 1 : false)
+    .map(([trackId]) => findTrackById(trackId))
+    .filter(Boolean)
+    .slice(0, 2);
+
+  const quarterfinalists = entries
+    .filter(([, round]) => semifinalists.length ? round === (state.roundEliminatedMap[trackKey(semifinalists[0])] - 1) : false)
+    .map(([trackId]) => findTrackById(trackId))
+    .filter(Boolean)
+    .slice(0, 4);
+
+  state.finalistsSummary = {
+    winner,
+    finalist,
+    semifinalists,
+    quarterfinalists
+  };
 }
 
 function getWinnerPath(winner) {
@@ -659,6 +690,22 @@ function renderBye(track) {
   `;
 }
 
+function renderMiniTrack(track, label = "") {
+  if (!track) return "";
+  return `
+    <div style="display:flex; gap:12px; align-items:center; padding:10px; border:1px solid #f1f5f9; border-radius:12px;">
+      ${label ? `<div style="width:110px; font-weight:bold; color:#111827;">${escapeHtml(label)}</div>` : ""}
+      <div style="width:48px;">
+        ${track.album?.images?.[0]?.url ? `<img src="${track.album.images[0].url}" width="48" height="48" style="border-radius:8px; object-fit:cover;">` : ""}
+      </div>
+      <div style="min-width:0; flex:1;">
+        <div style="font-weight:bold;">${escapeHtml(track.name)}</div>
+        <div style="font-size:13px; color:#6b7280;">${escapeHtml(getArtistNames(track))}</div>
+      </div>
+    </div>
+  `;
+}
+
 function renderQualifiedList() {
   const list = $("qualifiedList");
   const qualified = state.nextRound || [];
@@ -720,25 +767,32 @@ function updateDashboard() {
     : `${remainingInCurrentRound} / ${totalInCurrentRound} matchs restants dans ce tour`;
 }
 
-function renderTop8() {
-  if (!state.finalRanking.length) return "";
+function renderFinalStages() {
+  const { winner, finalist, semifinalists, quarterfinalists } = state.finalistsSummary;
+  if (!winner) return "";
 
   return `
     <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:20px; margin-top:16px;">
-      <h2 style="margin-top:0;">Top 8 final</h2>
-      <div style="display:grid; gap:10px;">
-        ${state.finalRanking.map((track, index) => `
-          <div style="display:flex; gap:12px; align-items:center; padding:10px; border:1px solid #f1f5f9; border-radius:12px;">
-            <div style="width:32px; font-weight:bold; color:#111827;">#${index + 1}</div>
-            <div style="width:48px;">
-              ${track.album?.images?.[0]?.url ? `<img src="${track.album.images[0].url}" width="48" height="48" style="border-radius:8px; object-fit:cover;">` : ""}
-            </div>
-            <div style="min-width:0; flex:1;">
-              <div style="font-weight:bold;">${escapeHtml(track.name)}</div>
-              <div style="font-size:13px; color:#6b7280;">${escapeHtml(getArtistNames(track))}</div>
-            </div>
+      <h2 style="margin-top:0;">Résumé des derniers tours</h2>
+      <div style="display:grid; gap:16px;">
+        <div>
+          <h3 style="margin:0 0 10px; font-size:16px;">Finaliste</h3>
+          ${finalist ? renderMiniTrack(finalist) : `<div style="color:#6b7280;">Aucun finaliste trouvé.</div>`}
+        </div>
+
+        <div>
+          <h3 style="margin:0 0 10px; font-size:16px;">Demi-finalistes</h3>
+          <div style="display:grid; gap:10px;">
+            ${semifinalists.length ? semifinalists.map(track => renderMiniTrack(track)).join("") : `<div style="color:#6b7280;">Aucun demi-finaliste trouvé.</div>`}
           </div>
-        `).join("")}
+        </div>
+
+        <div>
+          <h3 style="margin:0 0 10px; font-size:16px;">Quarts de finalistes</h3>
+          <div style="display:grid; gap:10px;">
+            ${quarterfinalists.length ? quarterfinalists.map(track => renderMiniTrack(track)).join("") : `<div style="color:#6b7280;">Aucun quart de finaliste trouvé.</div>`}
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -769,7 +823,7 @@ function showWinner(track) {
   state.isFinished = true;
   state.winnerTrack = track;
 
-  buildFinalRanking(track);
+  buildFinalistsSummary(track);
   updateDashboard();
   saveTournament();
 
@@ -783,7 +837,7 @@ function showWinner(track) {
       </div>
 
       ${renderWinnerPath(track)}
-      ${renderTop8()}
+      ${renderFinalStages()}
     </div>
   `);
 }
