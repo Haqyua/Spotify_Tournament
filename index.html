@@ -42,6 +42,8 @@ let currentRound = [];
 let nextRound = [];
 let index = 0;
 let byeTimeout = null;
+let roundByeTrack = null;
+let roundNumber = 1;
 
 function setStatus(message) {
   document.getElementById("status").innerHTML = `<p>${escapeHtml(message)}</p>`;
@@ -274,12 +276,25 @@ function shuffle(array) {
   }
 }
 
+function prepareRound() {
+  roundByeTrack = null;
+
+  if (currentRound.length > 1 && currentRound.length % 2 === 1) {
+    const byeIndex = Math.floor(Math.random() * currentRound.length);
+    roundByeTrack = currentRound[byeIndex];
+
+    currentRound.splice(byeIndex, 1);
+    currentRound.push(roundByeTrack);
+  }
+}
+
 // -------- SAVE / LOAD --------
 function saveState() {
   localStorage.setItem(STORAGE_KEYS.tournament, JSON.stringify({
     currentRound,
     nextRound,
-    index
+    index,
+    roundNumber
   }));
 }
 
@@ -291,6 +306,12 @@ function loadState() {
   currentRound = parsed.currentRound || [];
   nextRound = parsed.nextRound || [];
   index = parsed.index || 0;
+  roundNumber = parsed.roundNumber || 1;
+
+  roundByeTrack = currentRound.length > 1 && currentRound.length % 2 === 1
+    ? currentRound[currentRound.length - 1]
+    : null;
+
   return currentRound.length > 0 || nextRound.length > 0;
 }
 
@@ -375,19 +396,22 @@ function showMatch() {
       return;
     }
 
-    currentRound = nextRound;
+    currentRound = [...nextRound];
     nextRound = [];
     index = 0;
+    roundNumber += 1;
+    prepareRound();
+    saveState();
   }
 
   const a = currentRound[index];
   const b = currentRound[index + 1];
-  const upcomingBye = currentRound.length % 2 === 1 ? currentRound[currentRound.length - 1] : null;
   const isCurrentBye = !b;
 
   if (isCurrentBye) {
     clearStatus();
     document.getElementById("app").innerHTML = `
+      <p><b>Tour ${roundNumber}</b></p>
       <div style="display:flex; align-items:flex-start; gap:12px;">
         ${renderBye(a)}
         <div style="
@@ -415,12 +439,12 @@ function showMatch() {
 
   clearStatus();
   document.getElementById("app").innerHTML = `
+    <p><b>Tour ${roundNumber} — Match ${Math.floor(index / 2) + 1}</b></p>
     <div style="display:flex; align-items:flex-start; gap:12px;">
       <div style="width:18%; min-width:140px;">
-        ${upcomingBye ? renderBye(upcomingBye) : ""}
+        ${roundByeTrack ? renderBye(roundByeTrack) : ""}
       </div>
       <div style="flex:1;">
-        <p><b>Match ${Math.floor(index / 2) + 1}</b></p>
         ${renderTrack(a, 0)}
         ${renderTrack(b, 1)}
       </div>
@@ -454,6 +478,8 @@ function resetTournament() {
   currentRound = [];
   nextRound = [];
   index = 0;
+  roundByeTrack = null;
+  roundNumber = 1;
   document.getElementById("app").innerHTML = "";
   setStatus("Tournoi réinitialisé.");
 }
@@ -510,6 +536,8 @@ async function start() {
     currentRound = tracks;
     nextRound = [];
     index = 0;
+    roundNumber = 1;
+    prepareRound();
 
     saveState();
     showMatch();
