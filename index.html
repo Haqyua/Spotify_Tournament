@@ -250,7 +250,7 @@ async function getAllTracks(playlistId, token) {
     }
 
     const batch = (data.items || [])
-      .map(item => item.track)
+      .map(entry => entry.item || entry.track)
       .filter(track => track && track.type === "track" && track.name);
 
     tracks.push(...batch);
