@@ -19,6 +19,7 @@
 
   <div style="margin-bottom: 16px;">
     <button onclick="start()" style="padding: 10px 16px; font-size: 16px;">Start</button>
+    <button onclick="undoLastSelection()" id="undoButton" style="padding: 10px 16px; font-size: 16px; margin-left: 8px;">Undo</button>
     <button onclick="resetTournament()" style="padding: 10px 16px; font-size: 16px; margin-left: 8px;">Reset</button>
   </div>
 
@@ -44,6 +45,7 @@ let index = 0;
 let byeTimeout = null;
 let roundByeTrack = null;
 let roundNumber = 1;
+let historyStack = [];
 
 function setStatus(message) {
   document.getElementById("status").innerHTML = `<p>${escapeHtml(message)}</p>`;
@@ -88,6 +90,14 @@ function getPendingStart() {
 
 function clearPendingStart() {
   localStorage.removeItem(STORAGE_KEYS.pendingStart);
+}
+
+function updateUndoButton() {
+  const button = document.getElementById("undoButton");
+  if (!button) return;
+  button.disabled = historyStack.length === 0;
+  button.style.opacity = historyStack.length === 0 ? "0.5" : "1";
+  button.style.cursor = historyStack.length === 0 ? "not-allowed" : "pointer";
 }
 
 // -------- PKCE --------
@@ -288,13 +298,66 @@ function prepareRound() {
   }
 }
 
+// -------- HISTORY --------
+function createSnapshot() {
+  return {
+    currentRound: [...currentRound],
+    nextRound: [...nextRound],
+    index,
+    roundNumber,
+    roundByeTrack,
+    historyStack: historyStack.map(snapshot => ({
+      currentRound: [...snapshot.currentRound],
+      nextRound: [...snapshot.nextRound],
+      index: snapshot.index,
+      roundNumber: snapshot.roundNumber,
+      roundByeTrack: snapshot.roundByeTrack
+    }))
+  };
+}
+
+function pushHistorySnapshot() {
+  historyStack.push({
+    currentRound: [...currentRound],
+    nextRound: [...nextRound],
+    index,
+    roundNumber,
+    roundByeTrack
+  });
+  updateUndoButton();
+}
+
+function undoLastSelection() {
+  if (byeTimeout) {
+    clearTimeout(byeTimeout);
+    byeTimeout = null;
+  }
+
+  if (historyStack.length === 0) {
+    return;
+  }
+
+  const snapshot = historyStack.pop();
+  currentRound = [...snapshot.currentRound];
+  nextRound = [...snapshot.nextRound];
+  index = snapshot.index;
+  roundNumber = snapshot.roundNumber;
+  roundByeTrack = snapshot.roundByeTrack || null;
+
+  saveState();
+  updateUndoButton();
+  showMatch();
+}
+
 // -------- SAVE / LOAD --------
 function saveState() {
   localStorage.setItem(STORAGE_KEYS.tournament, JSON.stringify({
     currentRound,
     nextRound,
     index,
-    roundNumber
+    roundNumber,
+    roundByeTrack,
+    historyStack
   }));
 }
 
@@ -307,10 +370,10 @@ function loadState() {
   nextRound = parsed.nextRound || [];
   index = parsed.index || 0;
   roundNumber = parsed.roundNumber || 1;
+  roundByeTrack = parsed.roundByeTrack || null;
+  historyStack = parsed.historyStack || [];
 
-  roundByeTrack = currentRound.length > 1 && currentRound.length % 2 === 1
-    ? currentRound[currentRound.length - 1]
-    : null;
+  updateUndoButton();
 
   return currentRound.length > 0 || nextRound.length > 0;
 }
@@ -388,10 +451,14 @@ function showMatch() {
     byeTimeout = null;
   }
 
+  updateUndoButton();
+
   if (index >= currentRound.length) {
     if (nextRound.length === 1) {
       const winner = nextRound[0];
       clearState();
+      historyStack = [];
+      updateUndoButton();
       showWinner(winner);
       return;
     }
@@ -461,8 +528,11 @@ function vote(choice) {
     byeTimeout = null;
   }
 
+  pushHistorySnapshot();
   nextRound.push(currentRound[index + choice]);
   index += 2;
+
+  saveState();
   showMatch();
 }
 
@@ -480,6 +550,8 @@ function resetTournament() {
   index = 0;
   roundByeTrack = null;
   roundNumber = 1;
+  historyStack = [];
+  updateUndoButton();
   document.getElementById("app").innerHTML = "";
   setStatus("Tournoi réinitialisé.");
 }
@@ -537,9 +609,11 @@ async function start() {
     nextRound = [];
     index = 0;
     roundNumber = 1;
+    historyStack = [];
     prepareRound();
 
     saveState();
+    updateUndoButton();
     showMatch();
   } catch (error) {
     console.error(error);
@@ -574,6 +648,7 @@ window.onload = async () => {
       return;
     }
 
+    updateUndoButton();
     clearStatus();
   } catch (error) {
     console.error(error);
