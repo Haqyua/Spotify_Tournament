@@ -93,7 +93,10 @@ const state = {
   totalTracks: 0,
   qualifiedVisible: true,
   currentLeftTrack: null,
-  currentRightTrack: null
+  currentRightTrack: null,
+  finalRanking: [],
+  matchHistory: [],
+  roundEliminatedMap: {}
 };
 
 // -------- DOM --------
@@ -164,11 +167,16 @@ function simplifyTrack(track) {
     name: track.name || "Titre inconnu",
     artists: (track.artists || []).map(a => ({ name: a.name || "Artiste inconnu" })),
     album: {
-      images: track.album?.images?.[0]?.url ? [{ url: track.album.images[0].url }] : []
+      images: track.album?.images?.[0]?.url ? [{ url: track.album.images[0].url }] : [],
+      name: track.album?.name || "Album inconnu",
+      release_date: track.album?.release_date || ""
     },
     external_urls: {
       spotify: track.external_urls?.spotify || "#"
     },
+    duration_ms: track.duration_ms || 0,
+    popularity: typeof track.popularity === "number" ? track.popularity : null,
+    explicit: !!track.explicit,
     type: "track"
   };
 }
@@ -182,6 +190,22 @@ function shuffle(array) {
 
 function getArtistNames(track) {
   return (track.artists || []).map(a => a.name).join(", ") || "Artiste inconnu";
+}
+
+function formatDuration(ms) {
+  if (!ms) return "Inconnue";
+  const totalSeconds = Math.floor(ms / 1000);
+  const min = Math.floor(totalSeconds / 60);
+  const sec = totalSeconds % 60;
+  return `${min}:${String(sec).padStart(2, "0")}`;
+}
+
+function getYearFromDate(date) {
+  return date ? String(date).slice(0, 4) : "—";
+}
+
+function trackKey(track) {
+  return track?.id || "";
 }
 
 // -------- STORAGE --------
@@ -222,7 +246,10 @@ function saveTournament() {
       index: state.index,
       roundNumber: state.roundNumber,
       roundByeTrack: state.roundByeTrack,
-      totalTracks: state.totalTracks
+      totalTracks: state.totalTracks,
+      finalRanking: state.finalRanking,
+      matchHistory: state.matchHistory,
+      roundEliminatedMap: state.roundEliminatedMap
     }));
   } catch (error) {
     console.error("Erreur sauvegarde localStorage :", error);
@@ -241,6 +268,9 @@ function loadTournament() {
   state.roundNumber = data.roundNumber || 1;
   state.roundByeTrack = data.roundByeTrack || null;
   state.totalTracks = data.totalTracks || 0;
+  state.finalRanking = data.finalRanking || [];
+  state.matchHistory = data.matchHistory || [];
+  state.roundEliminatedMap = data.roundEliminatedMap || {};
   state.lastUndoSnapshot = null;
   updateUndoButton();
 
@@ -391,6 +421,9 @@ function resetTournamentData() {
   state.totalTracks = 0;
   state.currentLeftTrack = null;
   state.currentRightTrack = null;
+  state.finalRanking = [];
+  state.matchHistory = [];
+  state.roundEliminatedMap = {};
   updateUndoButton();
 }
 
@@ -411,7 +444,10 @@ function createUndoSnapshot() {
     nextRound: [...state.nextRound],
     index: state.index,
     roundNumber: state.roundNumber,
-    roundByeTrack: state.roundByeTrack
+    roundByeTrack: state.roundByeTrack,
+    finalRanking: [...state.finalRanking],
+    matchHistory: [...state.matchHistory],
+    roundEliminatedMap: { ...state.roundEliminatedMap }
   };
 }
 
@@ -424,11 +460,109 @@ function undoLastSelection() {
   state.index = state.lastUndoSnapshot.index;
   state.roundNumber = state.lastUndoSnapshot.roundNumber;
   state.roundByeTrack = state.lastUndoSnapshot.roundByeTrack || null;
+  state.finalRanking = [...state.lastUndoSnapshot.finalRanking];
+  state.matchHistory = [...state.lastUndoSnapshot.matchHistory];
+  state.roundEliminatedMap = { ...state.lastUndoSnapshot.roundEliminatedMap };
   state.lastUndoSnapshot = null;
 
   saveTournament();
   updateUndoButton();
   showMatch();
+}
+
+function registerMatchResult(winner, loser) {
+  const winnerId = trackKey(winner);
+  const loserId = trackKey(loser);
+
+  state.matchHistory.push({
+    round: state.roundNumber,
+    winnerId,
+    loserId,
+    winnerName: winner.name,
+    loserName: loser.name,
+    loserArtists: getArtistNames(loser),
+    isBye: false
+  });
+
+  state.roundEliminatedMap[loserId] = state.roundNumber;
+}
+
+function registerBye(track) {
+  const id = trackKey(track);
+
+  state.matchHistory.push({
+    round: state.roundNumber,
+    winnerId: id,
+    loserId: null,
+    winnerName: track.name,
+    loserName: null,
+    loserArtists: null,
+    isBye: true
+  });
+}
+
+function buildFinalRanking(winner) {
+  const winnerId = trackKey(winner);
+  const unique = new Map();
+  unique.set(winnerId, winner);
+
+  const ranked = [winner];
+
+  const entries = Object.entries(state.roundEliminatedMap)
+    .sort((a, b) => b[1] - a[1]);
+
+  for (const [trackId] of entries) {
+    const track = findTrackById(trackId);
+    if (track && !unique.has(trackId)) {
+      unique.set(trackId, track);
+      ranked.push(track);
+    }
+    if (ranked.length >= 8) break;
+  }
+
+  state.finalRanking = ranked.slice(0, 8);
+}
+
+function findTrackById(trackId) {
+  const pools = [
+    ...state.currentRound,
+    ...state.nextRound,
+    ...state.finalRanking
+  ];
+
+  for (const track of pools) {
+    if (trackKey(track) === trackId) return track;
+  }
+
+  for (const historyItem of state.matchHistory) {
+    if (historyItem.winnerId === trackId) {
+      const track = [...state.currentRound, ...state.nextRound, ...state.finalRanking].find(t => trackKey(t) === trackId);
+      if (track) return track;
+    }
+  }
+
+  return null;
+}
+
+function getWinnerPath(winner) {
+  const winnerId = trackKey(winner);
+
+  return state.matchHistory
+    .filter(item => item.winnerId === winnerId)
+    .sort((a, b) => a.round - b.round)
+    .map(item => {
+      if (item.isBye) {
+        return {
+          round: item.round,
+          text: "Bye"
+        };
+      }
+
+      return {
+        round: item.round,
+        text: `${item.loserName} — ${item.loserArtists}`
+      };
+    });
 }
 
 function vote(choice) {
@@ -437,7 +571,12 @@ function vote(choice) {
   state.lastUndoSnapshot = createUndoSnapshot();
   updateUndoButton();
 
-  state.nextRound.push(state.currentRound[state.index + choice]);
+  const winner = state.currentRound[state.index + choice];
+  const loser = state.currentRound[state.index + (choice === 0 ? 1 : 0)];
+
+  registerMatchResult(winner, loser);
+
+  state.nextRound.push(winner);
   state.index += 2;
 
   saveTournament();
@@ -463,10 +602,11 @@ function toggleQualified() {
 }
 
 // -------- RENDER --------
-function renderTrack(track, side) {
+function renderTrack(track, side, options = {}) {
   const imageUrl = track.album?.images?.[0]?.url || "";
   const artists = getArtistNames(track);
   const spotifyUrl = track.external_urls?.spotify || "#";
+  const showChoose = options.showChoose !== false;
 
   return `
     <div style="
@@ -482,10 +622,19 @@ function renderTrack(track, side) {
     ">
       ${imageUrl ? `<a href="${spotifyUrl}" target="_blank" rel="noopener noreferrer"><img src="${imageUrl}" alt="${escapeHtml(track.name)}" width="220" style="width:100%; max-width:220px; border-radius:12px;"></a><br><br>` : ""}
       <div style="font-size:20px; font-weight:bold; margin-bottom:8px;">${escapeHtml(track.name)}</div>
-      <div style="margin-bottom:16px; color:#4b5563;">${escapeHtml(artists)}</div>
+      <div style="margin-bottom:14px; color:#4b5563;">${escapeHtml(artists)}</div>
 
-      <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
-        <button onclick="vote(${side})" style="padding:12px 18px; font-size:16px; border:none; border-radius:10px; background:#111827; color:#fff; cursor:pointer;">Choisir</button>
+      ${showChoose ? `
+        <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
+          <button onclick="vote(${side})" style="padding:12px 18px; font-size:16px; border:none; border-radius:10px; background:#111827; color:#fff; cursor:pointer;">Choisir</button>
+        </div>
+      ` : ""}
+
+      <div style="font-size:13px; color:#6b7280;">
+        Album : ${escapeHtml(track.album?.name || "Album inconnu")} · ${escapeHtml(getYearFromDate(track.album?.release_date))}
+      </div>
+      <div style="font-size:13px; color:#6b7280; margin-top:4px;">
+        Durée : ${escapeHtml(formatDuration(track.duration_ms))}${track.popularity !== null ? ` · Popularité : ${track.popularity}` : ""}${track.explicit ? " · Explicit" : ""}
       </div>
     </div>
   `;
@@ -567,16 +716,66 @@ function updateDashboard() {
   $("roundMatchesInfo").textContent = `${remainingInCurrentRound} / ${totalInCurrentRound} matchs restants dans ce tour`;
 }
 
+function renderTop8() {
+  if (!state.finalRanking.length) return "";
+
+  return `
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:20px; margin-top:16px;">
+      <h2 style="margin-top:0;">Top 8 final</h2>
+      <div style="display:grid; gap:10px;">
+        ${state.finalRanking.map((track, index) => `
+          <div style="display:flex; gap:12px; align-items:center; padding:10px; border:1px solid #f1f5f9; border-radius:12px;">
+            <div style="width:32px; font-weight:bold; color:#111827;">#${index + 1}</div>
+            <div style="width:48px;">
+              ${track.album?.images?.[0]?.url ? `<img src="${track.album.images[0].url}" width="48" height="48" style="border-radius:8px; object-fit:cover;">` : ""}
+            </div>
+            <div style="min-width:0; flex:1;">
+              <div style="font-weight:bold;">${escapeHtml(track.name)}</div>
+              <div style="font-size:13px; color:#6b7280;">${escapeHtml(getArtistNames(track))}</div>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderWinnerPath(winner) {
+  const path = getWinnerPath(winner);
+
+  return `
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:20px; margin-top:16px;">
+      <h2 style="margin-top:0;">Parcours du top 1</h2>
+      <div style="display:grid; gap:10px;">
+        ${path.length ? path.map(step => `
+          <div style="padding:12px; border:1px solid #f1f5f9; border-radius:12px;">
+            <div style="font-weight:bold; margin-bottom:4px;">Tour ${step.round}</div>
+            <div style="color:#4b5563;">${escapeHtml(step.text)}</div>
+          </div>
+        `).join("") : `<div style="color:#6b7280;">Aucun parcours disponible.</div>`}
+      </div>
+    </div>
+  `;
+}
+
 function showWinner(track) {
   setStatus("");
   state.currentLeftTrack = track;
   state.currentRightTrack = null;
+
+  buildFinalRanking(track);
+
   setApp(`
-    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:20px;">
-      <h2 style="margin-top:0;">Gagnant</h2>
-      <div style="max-width:420px;">
-        ${renderTrack(track, 0)}
+    <div style="display:grid; gap:16px;">
+      <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:20px;">
+        <h2 style="margin-top:0;">Gagnant</h2>
+        <div style="max-width:480px;">
+          ${renderTrack(track, 0, { showChoose: false })}
+        </div>
       </div>
+
+      ${renderWinnerPath(track)}
+      ${renderTop8()}
     </div>
   `);
 }
@@ -623,6 +822,8 @@ function showMatch() {
         </div>
       </div>
     `);
+
+    registerBye(a);
 
     state.nextRound.push(a);
     state.index += 2;
