@@ -1,80 +1,181 @@
 <!DOCTYPE html>
-<html>
+<html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Spotify Tournament</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Playlist Tournament</title>
 </head>
-<body>
+<body style="font-family: Arial, sans-serif; max-width: 1000px; margin: 30px auto; padding: 0 16px;">
 
-<input id="playlistUrl" placeholder="Lien playlist Spotify" style="width: 400px;">
-<button onclick="start()">Start</button>
+  <h1>Playlist Tournament</h1>
 
-<div id="app" style="margin-top: 20px;"></div>
+  <div style="margin-bottom: 16px;">
+    <input
+      id="playlistUrl"
+      placeholder="Lien playlist Spotify"
+      style="width: 100%; max-width: 700px; padding: 10px; font-size: 16px;"
+    >
+  </div>
+
+  <div style="margin-bottom: 16px;">
+    <button onclick="start()" style="padding: 10px 16px; font-size: 16px;">Start</button>
+    <button onclick="resetTournament()" style="padding: 10px 16px; font-size: 16px; margin-left: 8px;">Reset</button>
+  </div>
+
+  <div id="status" style="margin-bottom: 16px;"></div>
+  <div id="app"></div>
 
 <script>
 const CLIENT_ID = "22522b51012f4caeb90b48d7f2b881f9";
 const REDIRECT_URI = "https://haqyua.github.io/Spotify_Tournament/";
+
+const STORAGE_KEYS = {
+  verifier: "spotify_pkce_verifier",
+  playlistUrl: "spotify_playlist_url",
+  pendingStart: "spotify_pending_start",
+  accessToken: "spotify_access_token",
+  tournament: "spotify_tournament_state"
+};
 
 let accessToken = null;
 let currentRound = [];
 let nextRound = [];
 let index = 0;
 
-function setMessage(message) {
-  document.getElementById("app").innerHTML = `<p>${message}</p>`;
+function setStatus(message) {
+  document.getElementById("status").innerHTML = `<p>${escapeHtml(message)}</p>`;
+}
+
+function setError(message) {
+  document.getElementById("status").innerHTML = `<p style="color: #b00020;"><b>Erreur :</b> ${escapeHtml(message)}</p>`;
+}
+
+function clearStatus() {
+  document.getElementById("status").innerHTML = "";
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function savePlaylistUrl() {
+  const value = document.getElementById("playlistUrl").value.trim();
+  localStorage.setItem(STORAGE_KEYS.playlistUrl, value);
+}
+
+function restorePlaylistUrl() {
+  const saved = localStorage.getItem(STORAGE_KEYS.playlistUrl);
+  if (saved) {
+    document.getElementById("playlistUrl").value = saved;
+  }
+}
+
+function savePendingStart(value) {
+  localStorage.setItem(STORAGE_KEYS.pendingStart, value ? "1" : "0");
+}
+
+function getPendingStart() {
+  return localStorage.getItem(STORAGE_KEYS.pendingStart) === "1";
+}
+
+function clearPendingStart() {
+  localStorage.removeItem(STORAGE_KEYS.pendingStart);
 }
 
 // -------- PKCE --------
-async function generatePKCE() {
-  const array = new Uint8Array(32);
+function randomString(length = 64) {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const array = new Uint8Array(length);
   crypto.getRandomValues(array);
+  let result = "";
+  for (let i = 0; i < array.length; i++) {
+    result += chars[array[i] % chars.length];
+  }
+  return result;
+}
 
-  const verifier = btoa(String.fromCharCode(...array))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-
+async function sha256(plain) {
   const encoder = new TextEncoder();
-  const data = encoder.encode(verifier);
-  const digest = await crypto.subtle.digest("SHA-256", data);
+  const data = encoder.encode(plain);
+  return await crypto.subtle.digest("SHA-256", data);
+}
 
-  const challenge = btoa(String.fromCharCode(...new Uint8Array(digest)))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+function base64UrlEncode(bytes) {
+  let binary = "";
+  const arr = new Uint8Array(bytes);
+  for (let i = 0; i < arr.byteLength; i++) {
+    binary += String.fromCharCode(arr[i]);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
 
+async function generatePKCE() {
+  const verifier = randomString(64);
+  const challenge = base64UrlEncode(await sha256(verifier));
   return { verifier, challenge };
 }
 
 async function redirectToAuth() {
   const { verifier, challenge } = await generatePKCE();
-  localStorage.setItem("verifier", verifier);
+  localStorage.setItem(STORAGE_KEYS.verifier, verifier);
 
-  const url =
-    "https://accounts.spotify.com/authorize" +
-    "?client_id=" + encodeURIComponent(CLIENT_ID) +
-    "&response_type=code" +
-    "&redirect_uri=" + encodeURIComponent(REDIRECT_URI) +
-    "&code_challenge_method=S256" +
-    "&code_challenge=" + encodeURIComponent(challenge) +
-    "&scope=" + encodeURIComponent("playlist-read-private playlist-read-collaborative");
+  const scope = [
+    "playlist-read-private",
+    "playlist-read-collaborative"
+  ].join(" ");
 
-  window.location.href = url;
+  const state = randomString(24);
+  sessionStorage.setItem("spotify_auth_state", state);
+
+  const authUrl = new URL("https://accounts.spotify.com/authorize");
+  authUrl.search = new URLSearchParams({
+    client_id: CLIENT_ID,
+    response_type: "code",
+    redirect_uri: REDIRECT_URI,
+    code_challenge_method: "S256",
+    code_challenge: challenge,
+    scope,
+    state
+  }).toString();
+
+  window.location.href = authUrl.toString();
 }
 
 function getCode() {
-  const params = new URLSearchParams(window.location.search);
-  return params.get("code");
+  return new URLSearchParams(window.location.search).get("code");
+}
+
+function getAuthError() {
+  return new URLSearchParams(window.location.search).get("error");
+}
+
+function getState() {
+  return new URLSearchParams(window.location.search).get("state");
 }
 
 async function fetchAccessToken() {
+  const authError = getAuthError();
+  if (authError) {
+    throw new Error("Autorisation Spotify refusée : " + authError);
+  }
+
   const code = getCode();
   if (!code) return null;
 
-  const verifier = localStorage.getItem("verifier");
+  const returnedState = getState();
+  const expectedState = sessionStorage.getItem("spotify_auth_state");
+  if (expectedState && returnedState !== expectedState) {
+    throw new Error("État d'autorisation invalide.");
+  }
+
+  const verifier = localStorage.getItem(STORAGE_KEYS.verifier);
   if (!verifier) {
-    setMessage("Code PKCE manquant.");
-    return null;
+    throw new Error("Code verifier PKCE introuvable.");
   }
 
   const res = await fetch("https://accounts.spotify.com/api/token", {
@@ -85,7 +186,7 @@ async function fetchAccessToken() {
     body: new URLSearchParams({
       client_id: CLIENT_ID,
       grant_type: "authorization_code",
-      code: code,
+      code,
       redirect_uri: REDIRECT_URI,
       code_verifier: verifier
     })
@@ -94,12 +195,12 @@ async function fetchAccessToken() {
   const data = await res.json();
 
   if (!res.ok) {
-    console.error("Erreur token :", data);
-    setMessage("Erreur lors de la récupération du token Spotify.");
-    return null;
+    throw new Error(data.error_description || data.error || "Échec de récupération du token.");
   }
 
+  localStorage.setItem(STORAGE_KEYS.accessToken, data.access_token);
   window.history.replaceState({}, document.title, REDIRECT_URI);
+
   return data.access_token;
 }
 
@@ -111,21 +212,26 @@ function getPlaylistId(url) {
 
 async function getAllTracks(playlistId, token) {
   let tracks = [];
-  let url = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100`;
+  let url = `https://api.spotify.com/v1/playlists/${playlistId}/items?limit=100`;
 
   while (url) {
     const res = await fetch(url, {
-      headers: { Authorization: "Bearer " + token }
+      headers: {
+        Authorization: "Bearer " + token
+      }
     });
 
     const data = await res.json();
 
     if (!res.ok) {
-      console.error("Erreur playlist :", data);
       throw new Error(data.error?.message || "Erreur API Spotify");
     }
 
-    tracks.push(...data.items.map(i => i.track).filter(t => t));
+    const batch = (data.items || [])
+      .map(item => item.track)
+      .filter(track => track && track.type === "track");
+
+    tracks.push(...batch);
     url = data.next;
   }
 
@@ -140,9 +246,9 @@ function shuffle(array) {
   }
 }
 
-// -------- SAVE --------
+// -------- SAVE / LOAD --------
 function saveState() {
-  localStorage.setItem("tournament", JSON.stringify({
+  localStorage.setItem(STORAGE_KEYS.tournament, JSON.stringify({
     currentRound,
     nextRound,
     index
@@ -150,27 +256,52 @@ function saveState() {
 }
 
 function loadState() {
-  const data = localStorage.getItem("tournament");
-  if (!data) return false;
+  const raw = localStorage.getItem(STORAGE_KEYS.tournament);
+  if (!raw) return false;
 
-  const parsed = JSON.parse(data);
-  currentRound = parsed.currentRound;
-  nextRound = parsed.nextRound;
-  index = parsed.index;
-  return true;
+  const parsed = JSON.parse(raw);
+  currentRound = parsed.currentRound || [];
+  nextRound = parsed.nextRound || [];
+  index = parsed.index || 0;
+  return currentRound.length > 0 || nextRound.length > 0;
+}
+
+function clearState() {
+  localStorage.removeItem(STORAGE_KEYS.tournament);
 }
 
 // -------- UI --------
 function renderTrack(t, side) {
   const imageUrl = t.album?.images?.[0]?.url || "";
-  const artists = t.artists?.map(a => a.name).join(", ") || "Artiste inconnu";
+  const artists = (t.artists || []).map(a => a.name).join(", ") || "Artiste inconnu";
+  const spotifyUrl = t.external_urls?.spotify || "#";
 
   return `
-    <div style="width:45%;display:inline-block;text-align:center;vertical-align:top;padding:10px;">
-      ${imageUrl ? `<img src="${imageUrl}" width="150"><br>` : ""}
-      <b>${t.name}</b><br>
-      ${artists}<br><br>
-      <button onclick="vote(${side})">Choisir</button>
+    <div style="
+      width: 46%;
+      display: inline-block;
+      vertical-align: top;
+      text-align: center;
+      border: 1px solid #ddd;
+      border-radius: 12px;
+      padding: 16px;
+      margin: 8px;
+      box-sizing: border-box;
+    ">
+      ${imageUrl ? `<a href="${spotifyUrl}" target="_blank" rel="noopener noreferrer"><img src="${imageUrl}" alt="${escapeHtml(t.name)}" width="180" style="border-radius: 8px;"></a><br><br>` : ""}
+      <div style="font-size: 18px; font-weight: bold; margin-bottom: 8px;">${escapeHtml(t.name)}</div>
+      <div style="margin-bottom: 14px;">${escapeHtml(artists)}</div>
+      <button onclick="vote(${side})" style="padding: 10px 16px; font-size: 16px;">Choisir</button>
+    </div>
+  `;
+}
+
+function showWinner(track) {
+  clearStatus();
+  document.getElementById("app").innerHTML = `
+    <h2>Gagnant</h2>
+    <div style="max-width: 360px;">
+      ${renderTrack(track, 0)}
     </div>
   `;
 }
@@ -178,9 +309,9 @@ function renderTrack(t, side) {
 function showMatch() {
   if (index >= currentRound.length) {
     if (nextRound.length === 1) {
-      localStorage.removeItem("tournament");
-      document.getElementById("app").innerHTML =
-        "<h2>Gagnant :</h2>" + renderTrack(nextRound[0], 0);
+      const winner = nextRound[0];
+      clearState();
+      showWinner(winner);
       return;
     }
 
@@ -200,10 +331,12 @@ function showMatch() {
     return;
   }
 
-  document.getElementById("app").innerHTML =
-    `<p>Match ${Math.floor(index / 2) + 1}</p>` +
-    renderTrack(a, 0) +
-    renderTrack(b, 1);
+  clearStatus();
+  document.getElementById("app").innerHTML = `
+    <p><b>Match ${Math.floor(index / 2) + 1}</b></p>
+    ${renderTrack(a, 0)}
+    ${renderTrack(b, 1)}
+  `;
 
   saveState();
 }
@@ -215,44 +348,54 @@ function vote(choice) {
   showMatch();
 }
 
+// -------- RESET --------
+function resetTournament() {
+  clearState();
+  clearPendingStart();
+  currentRound = [];
+  nextRound = [];
+  index = 0;
+  document.getElementById("app").innerHTML = "";
+  setStatus("Tournoi réinitialisé.");
+}
+
 // -------- START --------
 async function start() {
   try {
-    setMessage("Chargement...");
+    setStatus("Chargement...");
 
     if (!CLIENT_ID) {
-      setMessage("CLIENT_ID manquant.");
-      return;
+      throw new Error("CLIENT_ID manquant.");
     }
 
     if (!REDIRECT_URI) {
-      setMessage("REDIRECT_URI manquant.");
-      return;
+      throw new Error("REDIRECT_URI manquant.");
     }
+
+    const playlistUrl = document.getElementById("playlistUrl").value.trim();
+    const playlistId = getPlaylistId(playlistUrl);
+
+    if (!playlistId) {
+      throw new Error("Lien de playlist invalide.");
+    }
+
+    savePlaylistUrl();
 
     if (!accessToken) {
       accessToken = await fetchAccessToken();
     }
 
     if (!accessToken) {
+      savePendingStart(true);
       await redirectToAuth();
       return;
     }
 
-    const url = document.getElementById("playlistUrl").value.trim();
-    const id = getPlaylistId(url);
-
-    if (!id) {
-      setMessage("Lien de playlist invalide.");
-      return;
-    }
-
-    let tracks = await getAllTracks(id, accessToken);
-    tracks = tracks.filter(t => t && t.name);
+    const tracks = (await getAllTracks(playlistId, accessToken))
+      .filter(t => t && t.name);
 
     if (tracks.length === 0) {
-      setMessage("Aucune musique trouvée dans cette playlist.");
-      return;
+      throw new Error("Aucune musique trouvée dans cette playlist.");
     }
 
     shuffle(tracks);
@@ -265,21 +408,41 @@ async function start() {
     showMatch();
   } catch (error) {
     console.error(error);
-    setMessage("Erreur : " + error.message);
+    setError(error.message || "Erreur inconnue.");
   }
 }
 
-// -------- AUTO LOAD --------
+// -------- INIT --------
 window.onload = async () => {
   try {
-    accessToken = await fetchAccessToken();
+    restorePlaylistUrl();
+
+    const savedToken = localStorage.getItem(STORAGE_KEYS.accessToken);
+    if (savedToken) {
+      accessToken = savedToken;
+    }
+
+    const code = getCode();
+    if (code) {
+      setStatus("Connexion Spotify...");
+      accessToken = await fetchAccessToken();
+    }
 
     if (loadState()) {
       showMatch();
+      return;
     }
+
+    if (getPendingStart()) {
+      clearPendingStart();
+      await start();
+      return;
+    }
+
+    clearStatus();
   } catch (error) {
     console.error(error);
-    setMessage("Erreur au chargement : " + error.message);
+    setError(error.message || "Erreur au chargement.");
   }
 };
 </script>
