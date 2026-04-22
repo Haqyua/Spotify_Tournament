@@ -96,7 +96,10 @@ const state = {
   currentRightTrack: null,
   finalRanking: [],
   matchHistory: [],
-  roundEliminatedMap: {}
+  roundEliminatedMap: {},
+  allTracks: [],
+  isFinished: false,
+  winnerTrack: null
 };
 
 // -------- DOM --------
@@ -249,7 +252,10 @@ function saveTournament() {
       totalTracks: state.totalTracks,
       finalRanking: state.finalRanking,
       matchHistory: state.matchHistory,
-      roundEliminatedMap: state.roundEliminatedMap
+      roundEliminatedMap: state.roundEliminatedMap,
+      allTracks: state.allTracks,
+      isFinished: state.isFinished,
+      winnerTrack: state.winnerTrack
     }));
   } catch (error) {
     console.error("Erreur sauvegarde localStorage :", error);
@@ -271,10 +277,13 @@ function loadTournament() {
   state.finalRanking = data.finalRanking || [];
   state.matchHistory = data.matchHistory || [];
   state.roundEliminatedMap = data.roundEliminatedMap || {};
+  state.allTracks = data.allTracks || [];
+  state.isFinished = !!data.isFinished;
+  state.winnerTrack = data.winnerTrack || null;
   state.lastUndoSnapshot = null;
   updateUndoButton();
 
-  return state.currentRound.length > 0 || state.nextRound.length > 0;
+  return state.currentRound.length > 0 || state.nextRound.length > 0 || state.isFinished;
 }
 
 function clearTournament() {
@@ -424,6 +433,9 @@ function resetTournamentData() {
   state.finalRanking = [];
   state.matchHistory = [];
   state.roundEliminatedMap = {};
+  state.allTracks = [];
+  state.isFinished = false;
+  state.winnerTrack = null;
   updateUndoButton();
 }
 
@@ -447,7 +459,9 @@ function createUndoSnapshot() {
     roundByeTrack: state.roundByeTrack,
     finalRanking: [...state.finalRanking],
     matchHistory: [...state.matchHistory],
-    roundEliminatedMap: { ...state.roundEliminatedMap }
+    roundEliminatedMap: { ...state.roundEliminatedMap },
+    isFinished: state.isFinished,
+    winnerTrack: state.winnerTrack
   };
 }
 
@@ -463,6 +477,8 @@ function undoLastSelection() {
   state.finalRanking = [...state.lastUndoSnapshot.finalRanking];
   state.matchHistory = [...state.lastUndoSnapshot.matchHistory];
   state.roundEliminatedMap = { ...state.lastUndoSnapshot.roundEliminatedMap };
+  state.isFinished = state.lastUndoSnapshot.isFinished;
+  state.winnerTrack = state.lastUndoSnapshot.winnerTrack || null;
   state.lastUndoSnapshot = null;
 
   saveTournament();
@@ -501,11 +517,13 @@ function registerBye(track) {
   });
 }
 
+function findTrackById(trackId) {
+  return state.allTracks.find(track => trackKey(track) === trackId) || null;
+}
+
 function buildFinalRanking(winner) {
   const winnerId = trackKey(winner);
-  const unique = new Map();
-  unique.set(winnerId, winner);
-
+  const used = new Set([winnerId]);
   const ranked = [winner];
 
   const entries = Object.entries(state.roundEliminatedMap)
@@ -513,35 +531,14 @@ function buildFinalRanking(winner) {
 
   for (const [trackId] of entries) {
     const track = findTrackById(trackId);
-    if (track && !unique.has(trackId)) {
-      unique.set(trackId, track);
+    if (track && !used.has(trackId)) {
       ranked.push(track);
+      used.add(trackId);
     }
     if (ranked.length >= 8) break;
   }
 
   state.finalRanking = ranked.slice(0, 8);
-}
-
-function findTrackById(trackId) {
-  const pools = [
-    ...state.currentRound,
-    ...state.nextRound,
-    ...state.finalRanking
-  ];
-
-  for (const track of pools) {
-    if (trackKey(track) === trackId) return track;
-  }
-
-  for (const historyItem of state.matchHistory) {
-    if (historyItem.winnerId === trackId) {
-      const track = [...state.currentRound, ...state.nextRound, ...state.finalRanking].find(t => trackKey(t) === trackId);
-      if (track) return track;
-    }
-  }
-
-  return null;
 }
 
 function getWinnerPath(winner) {
@@ -698,22 +695,29 @@ function renderQualifiedPanelState() {
 }
 
 function updateDashboard() {
-  const active = state.currentRound.length > 0 || state.nextRound.length > 0;
+  const active = state.currentRound.length > 0 || state.nextRound.length > 0 || state.isFinished;
   $("dashboard").style.display = active ? "flex" : "none";
   if (!active) return;
 
   const totalMatches = Math.max(0, state.totalTracks - 1);
-  const completedMatches = state.nextRound.length + (state.totalTracks - state.currentRound.length - state.nextRound.length);
+  const completedMatches = state.matchHistory.filter(item => !item.isBye).length;
   const progressPercent = totalMatches > 0 ? (completedMatches / totalMatches) * 100 : 0;
 
-  const remainingInCurrentRound = Math.max(0, Math.ceil((state.currentRound.length - state.index) / 2));
-  const totalInCurrentRound = Math.ceil(state.currentRound.length / 2);
+  let remainingInCurrentRound = 0;
+  let totalInCurrentRound = 0;
 
-  $("progressBar").style.width = `${progressPercent}%`;
+  if (!state.isFinished) {
+    remainingInCurrentRound = Math.max(0, Math.floor((state.currentRound.length - state.index) / 2));
+    totalInCurrentRound = Math.floor(state.currentRound.length / 2);
+  }
+
+  $("progressBar").style.width = `${Math.min(100, progressPercent)}%`;
   $("progressText").textContent = `Progression : ${completedMatches} / ${totalMatches} matchs`;
-  $("roundInfo").textContent = `Tour ${state.roundNumber}`;
+  $("roundInfo").textContent = state.isFinished ? "Terminé" : `Tour ${state.roundNumber}`;
   $("globalMatchesInfo").textContent = `${Math.max(0, totalMatches - completedMatches)} matchs restants au total`;
-  $("roundMatchesInfo").textContent = `${remainingInCurrentRound} / ${totalInCurrentRound} matchs restants dans ce tour`;
+  $("roundMatchesInfo").textContent = state.isFinished
+    ? `0 / 0 matchs restants dans ce tour`
+    : `${remainingInCurrentRound} / ${totalInCurrentRound} matchs restants dans ce tour`;
 }
 
 function renderTop8() {
@@ -762,8 +766,12 @@ function showWinner(track) {
   setStatus("");
   state.currentLeftTrack = track;
   state.currentRightTrack = null;
+  state.isFinished = true;
+  state.winnerTrack = track;
 
   buildFinalRanking(track);
+  updateDashboard();
+  saveTournament();
 
   setApp(`
     <div style="display:grid; gap:16px;">
@@ -787,10 +795,8 @@ function showMatch() {
   if (state.index >= state.currentRound.length) {
     if (state.nextRound.length === 1) {
       const winner = state.nextRound[0];
-      clearTournament();
       state.lastUndoSnapshot = null;
       updateUndoButton();
-      updateDashboard();
       renderQualifiedList();
       showWinner(winner);
       return;
@@ -892,6 +898,7 @@ async function start() {
 
     resetTournamentData();
     state.currentRound = tracks;
+    state.allTracks = [...tracks];
     state.totalTracks = tracks.length;
     prepareRound();
 
@@ -928,9 +935,18 @@ async function init() {
 
     if (loadTournament()) {
       renderQualifiedPanelState();
+
+      if (state.isFinished && state.winnerTrack) {
+        showWinner(state.winnerTrack);
+        return;
+      }
+
       showMatch();
       return;
     }
+
+    updateUndoButton();
+    updateDashboard();
 
     if (getPendingStart()) {
       clearPendingStart();
@@ -938,8 +954,6 @@ async function init() {
       return;
     }
 
-    updateUndoButton();
-    updateDashboard();
     setStatus("");
   } catch (error) {
     console.error(error);
