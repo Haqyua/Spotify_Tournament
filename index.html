@@ -126,7 +126,8 @@ const state = {
   isFinished: false,
   winnerTrack: null,
   keptTracks: [],
-  bracketLocked: false
+  bracketLocked: false,
+  authInProgress: false
 };
 
 // -------- DOM --------
@@ -227,6 +228,10 @@ function getYearFromDate(date) {
 
 function trackKey(track) {
   return track?.id || "";
+}
+
+function isByeMode() {
+  return state.mode === "bracket" && state.groupSize === 2;
 }
 
 // -------- SETTINGS --------
@@ -534,10 +539,22 @@ function createGroupsForRound() {
   if (start >= state.currentRound.length) return null;
 
   const remaining = state.currentRound.length - start;
-  if (remaining === 1) return [state.currentRound[start]];
 
-  const size = Math.min(state.groupSize, remaining);
-  return state.currentRound.slice(start, start + size);
+  if (isByeMode() && remaining === 1) {
+    return [state.currentRound[start]];
+  }
+
+  if (remaining <= state.groupSize) {
+    return state.currentRound.slice(start, start + remaining);
+  }
+
+  const afterStandardTake = remaining - state.groupSize;
+
+  if (!isByeMode() && afterStandardTake > 0 && afterStandardTake < 2) {
+    return state.currentRound.slice(start, start + state.groupSize + afterStandardTake);
+  }
+
+  return state.currentRound.slice(start, start + state.groupSize);
 }
 
 function createUndoSnapshot() {
@@ -722,11 +739,19 @@ function moveToNextStep() {
 
   state.currentGroup = nextGroup;
 
-  if (nextGroup.length === 1) {
+  if (isByeMode() && nextGroup.length === 1) {
     setStatus("");
     setApp(`
-      <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:24px;">
-        <p style="margin:0; font-size:20px;"><b>${escapeHtml(nextGroup[0].name)}</b> ${state.mode === "save_one" ? "est gardée automatiquement" : "passe automatiquement au tour suivant"}.</p>
+      <div style="display:grid; grid-template-columns:220px minmax(0,1fr); gap:16px;">
+        <div style="background:#fff; border:1px dashed #cbd5e1; border-radius:16px; padding:12px; text-align:center; font-size:12px; opacity:0.85;">
+          <div style="font-size:11px; font-weight:bold; margin-bottom:8px;">BYE DU TOUR</div>
+          ${nextGroup[0].album?.images?.[0]?.url ? `<img src="${nextGroup[0].album.images[0].url}" alt="${escapeHtml(nextGroup[0].name)}" width="72" style="border-radius:8px;"><br><br>` : ""}
+          <div style="font-weight:bold; margin-bottom:4px;">${escapeHtml(nextGroup[0].name)}</div>
+          <div style="color:#6b7280;">${escapeHtml(getArtistNames(nextGroup[0]))}</div>
+        </div>
+        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:24px;">
+          <p style="margin:0; font-size:20px;"><b>${escapeHtml(nextGroup[0].name)}</b> passe automatiquement au tour suivant.</p>
+        </div>
       </div>
     `);
 
@@ -748,35 +773,42 @@ function renderTrack(track, index = null, options = {}) {
   const artists = getArtistNames(track);
   const spotifyUrl = track.external_urls?.spotify || "#";
   const showChoose = options.showChoose !== false;
-  const compact = options.compact !== false;
+  const compactLevel = options.compactLevel || "normal";
+
+  const sizing = {
+    tight: { minWidth: 170, maxWidth: 210, img: 120, pad: 10, title: 14, sub: 12, button: 13 },
+    compact: { minWidth: 190, maxWidth: 230, img: 135, pad: 11, title: 15, sub: 12, button: 14 },
+    normal: { minWidth: 220, maxWidth: 260, img: 150, pad: 12, title: 16, sub: 13, button: 14 },
+    wide: { minWidth: 260, maxWidth: 320, img: 190, pad: 16, title: 18, sub: 14, button: 16 }
+  }[compactLevel];
 
   return `
     <div style="
       flex:1;
-      min-width:${compact ? 200 : 260}px;
-      max-width:${compact ? 250 : "none"};
+      min-width:${sizing.minWidth}px;
+      max-width:${sizing.maxWidth}px;
       text-align:center;
       background:#fff;
       border:1px solid #e5e7eb;
       border-radius:16px;
-      padding:${compact ? 12 : 18}px;
+      padding:${sizing.pad}px;
       box-sizing:border-box;
       box-shadow:0 4px 12px rgba(0,0,0,0.04);
     ">
-      ${imageUrl ? `<a href="${spotifyUrl}" target="_blank" rel="noopener noreferrer"><img src="${imageUrl}" alt="${escapeHtml(track.name)}" style="width:100%; max-width:${compact ? 150 : 220}px; border-radius:10px;"></a><br><br>` : ""}
-      <div style="font-size:${compact ? 16 : 20}px; font-weight:bold; margin-bottom:6px;">${escapeHtml(track.name)}</div>
-      <div style="margin-bottom:10px; color:#4b5563; font-size:${compact ? 13 : 15}px;">${escapeHtml(artists)}</div>
+      ${imageUrl ? `<a href="${spotifyUrl}" target="_blank" rel="noopener noreferrer"><img src="${imageUrl}" alt="${escapeHtml(track.name)}" style="width:100%; max-width:${sizing.img}px; border-radius:10px;"></a><br><br>` : ""}
+      <div style="font-size:${sizing.title}px; font-weight:bold; margin-bottom:6px; line-height:1.25;">${escapeHtml(track.name)}</div>
+      <div style="margin-bottom:10px; color:#4b5563; font-size:${sizing.sub}px; line-height:1.25;">${escapeHtml(artists)}</div>
 
       ${showChoose ? `
         <div style="display:flex; justify-content:center; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
-          <button onclick="chooseTrack(${index})" style="padding:${compact ? "10px 14px" : "12px 18px"}; font-size:${compact ? 14 : 16}px; border:none; border-radius:10px; background:#111827; color:#fff; cursor:pointer;">Garder</button>
+          <button onclick="chooseTrack(${index})" style="padding:${compactLevel === "wide" ? "11px 16px" : "9px 12px"}; font-size:${sizing.button}px; border:none; border-radius:10px; background:#111827; color:#fff; cursor:pointer;">Garder</button>
         </div>
       ` : ""}
 
-      <div style="font-size:12px; color:#6b7280;">
+      <div style="font-size:12px; color:#6b7280; line-height:1.3;">
         Album : ${escapeHtml(track.album?.name || "Album inconnu")} · ${escapeHtml(getYearFromDate(track.album?.release_date))}
       </div>
-      <div style="font-size:12px; color:#6b7280; margin-top:4px;">
+      <div style="font-size:12px; color:#6b7280; margin-top:4px; line-height:1.3;">
         ${track.popularity !== null ? `Popularité : ${track.popularity}` : ""}${track.explicit ? `${track.popularity !== null ? " · " : ""}Explicit` : ""}
       </div>
     </div>
@@ -838,18 +870,56 @@ function getTotalSelectionCount() {
   if (!state.totalTracks) return 0;
 
   if (state.mode === "save_one") {
-    return Math.ceil(state.totalTracks / state.groupSize);
+    let remaining = state.totalTracks;
+    let totalGroups = 0;
+
+    while (remaining > 0) {
+      if (remaining <= state.groupSize) {
+        totalGroups += 1;
+        break;
+      }
+      if (!isByeMode()) {
+        const afterStandardTake = remaining - state.groupSize;
+        if (afterStandardTake > 0 && afterStandardTake < 2) {
+          totalGroups += 1;
+          break;
+        }
+      }
+      totalGroups += 1;
+      remaining -= state.groupSize;
+    }
+
+    return totalGroups - (isByeMode() && state.totalTracks % 2 === 1 ? 1 : 0);
   }
 
   let remaining = state.totalTracks;
   let total = 0;
 
   while (remaining > 1) {
-    let groups = Math.ceil(remaining / state.groupSize);
-    let byes = remaining % state.groupSize === 1 ? 1 : 0;
-    let selectionsThisRound = groups - byes;
-    total += selectionsThisRound;
-    remaining = groups;
+    let nextRemaining = 0;
+    let i = 0;
+
+    while (i < remaining) {
+      const left = remaining - i;
+
+      if (isByeMode() && left === 1) {
+        nextRemaining += 1;
+        i += 1;
+        continue;
+      }
+
+      let groupSize = Math.min(state.groupSize, left);
+
+      if (!isByeMode() && left > state.groupSize && (left - state.groupSize) < 2) {
+        groupSize = left;
+      }
+
+      total += 1;
+      nextRemaining += 1;
+      i += groupSize;
+    }
+
+    remaining = nextRemaining;
   }
 
   return total;
@@ -878,10 +948,50 @@ function updateDashboard() {
   if (state.isFinished) {
     $("roundMatchesInfo").textContent = `0 / 0 restants`;
   } else {
-    const remainingItems = state.currentRound.length - state.currentGroupStartIndex;
-    const remainingGroups = remainingItems <= 0 ? 0 : Math.ceil(remainingItems / state.groupSize);
-    const totalGroups = Math.ceil(state.currentRound.length / state.groupSize);
-    $("roundMatchesInfo").textContent = `${remainingGroups} / ${totalGroups} restants dans ce tour`;
+    let groupsLeft = 0;
+    let totalGroups = 0;
+    let i = state.currentGroupStartIndex;
+    while (i < state.currentRound.length) {
+      const left = state.currentRound.length - i;
+
+      if (isByeMode() && left === 1) {
+        totalGroups += 1;
+        groupsLeft += 1;
+        i += 1;
+        continue;
+      }
+
+      let groupSize = Math.min(state.groupSize, left);
+      if (!isByeMode() && left > state.groupSize && (left - state.groupSize) < 2) {
+        groupSize = left;
+      }
+
+      totalGroups += 1;
+      groupsLeft += 1;
+      i += groupSize;
+    }
+
+    let j = 0;
+    let allGroups = 0;
+    while (j < state.currentRound.length) {
+      const left = state.currentRound.length - j;
+
+      if (isByeMode() && left === 1) {
+        allGroups += 1;
+        j += 1;
+        continue;
+      }
+
+      let groupSize = Math.min(state.groupSize, left);
+      if (!isByeMode() && left > state.groupSize && (left - state.groupSize) < 2) {
+        groupSize = left;
+      }
+
+      allGroups += 1;
+      j += groupSize;
+    }
+
+    $("roundMatchesInfo").textContent = `${groupsLeft} / ${allGroups} restants dans ce tour`;
   }
 }
 
@@ -945,17 +1055,33 @@ function renderSaveOneSummary() {
   `;
 }
 
+function getCompactLevel(count) {
+  if (count >= 5) return "tight";
+  if (count === 4) return "compact";
+  if (count === 3) return "compact";
+  if (count === 2) return "normal";
+  return "wide";
+}
+
+function getGridColumns(count) {
+  if (count >= 7) return 4;
+  if (count >= 5) return 3;
+  if (count === 4) return 4;
+  if (count === 3) return 3;
+  return 2;
+}
+
 function renderGroupSelection() {
   updateDashboard();
   renderQualifiedList();
 
-  const compact = state.currentGroup.length >= 5;
-  const columns = state.currentGroup.length >= 6 ? 4 : state.currentGroup.length >= 4 ? 3 : 2;
+  const compactLevel = getCompactLevel(state.currentGroup.length);
+  const columns = getGridColumns(state.currentGroup.length);
 
   setStatus("");
   setApp(`
-    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:16px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:14px;">
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:14px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:12px;">
         <div>
           <b>${state.mode === "bracket" ? `Tour ${state.roundNumber}` : "Save one"} — Groupe de ${state.currentGroup.length} musiques</b>
         </div>
@@ -964,8 +1090,8 @@ function renderGroupSelection() {
         </div>
       </div>
 
-      <div style="display:grid; grid-template-columns: repeat(${columns}, minmax(0, 1fr)); gap:12px;">
-        ${state.currentGroup.map((track, index) => renderTrack(track, index, { compact })).join("")}
+      <div style="display:grid; grid-template-columns: repeat(${columns}, minmax(0, 1fr)); gap:10px; justify-items:center;">
+        ${state.currentGroup.map((track, index) => renderTrack(track, index, { compactLevel })).join("")}
       </div>
     </div>
   `);
@@ -984,7 +1110,7 @@ function showWinner(winner) {
       <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:20px;">
         <h2 style="margin-top:0;">Gagnant</h2>
         <div style="max-width:480px;">
-          ${renderTrack(winner, null, { showChoose: false, compact: false })}
+          ${renderTrack(winner, null, { showChoose: false, compactLevel: "wide" })}
         </div>
       </div>
 
@@ -1031,13 +1157,13 @@ async function start() {
     savePlaylistUrl();
 
     if (!state.accessToken) {
+      const code = getQueryParam("code");
+      if (!code) {
+        setPendingStart(true);
+        await redirectToAuth();
+        return;
+      }
       state.accessToken = await fetchAccessToken();
-    }
-
-    if (!state.accessToken) {
-      setPendingStart(true);
-      await redirectToAuth();
-      return;
     }
 
     const meta = await getPlaylistMeta(playlistId);
@@ -1107,6 +1233,13 @@ async function init() {
 
     updateUndoButton();
     updateDashboard();
+
+    if (getPendingStart()) {
+      clearPendingStart();
+      await start();
+      return;
+    }
+
     setStatus("");
   } catch (error) {
     console.error(error);
@@ -1138,6 +1271,8 @@ function toggleQualified() {
 
 // -------- KEYBOARD --------
 document.addEventListener("keydown", (event) => {
+  if (state.isFinished) return;
+
   const tag = document.activeElement?.tagName?.toLowerCase();
   const isTyping = tag === "input" || tag === "textarea";
   if (isTyping) return;
