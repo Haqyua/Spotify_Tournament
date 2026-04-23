@@ -126,8 +126,7 @@ const state = {
   isFinished: false,
   winnerTrack: null,
   keptTracks: [],
-  bracketLocked: false,
-  authInProgress: false
+  bracketLocked: false
 };
 
 // -------- DOM --------
@@ -635,22 +634,47 @@ function findTrackById(trackId) {
 }
 
 function buildFinalistsSummary(winner) {
-  const roundGroups = {};
-  Object.entries(state.roundEliminatedMap).forEach(([trackId, round]) => {
-    if (!roundGroups[round]) roundGroups[round] = [];
-    roundGroups[round].push(findTrackById(trackId));
-  });
+  if (state.groupSize === 2) {
+    const roundGroups = {};
+    Object.entries(state.roundEliminatedMap).forEach(([trackId, round]) => {
+      if (!roundGroups[round]) roundGroups[round] = [];
+      roundGroups[round].push(findTrackById(trackId));
+    });
 
-  const rounds = Object.keys(roundGroups).map(Number).sort((a, b) => b - a);
-  const finalistRound = rounds[0];
-  const semifinalRound = rounds[1];
-  const quarterRound = rounds[2];
+    const rounds = Object.keys(roundGroups).map(Number).sort((a, b) => b - a);
+    const finalistRound = rounds[0];
+    const semifinalRound = rounds[1];
+    const quarterRound = rounds[2];
+
+    state.finalistsSummary = {
+      winner,
+      finalist: finalistRound ? (roundGroups[finalistRound] || []).filter(Boolean)[0] || null : null,
+      semifinalists: semifinalRound ? (roundGroups[semifinalRound] || []).filter(Boolean).slice(0, 2) : [],
+      quarterfinalists: quarterRound ? (roundGroups[quarterRound] || []).filter(Boolean).slice(0, 4) : []
+    };
+    return;
+  }
+
+  const roundsDesc = [...new Set(Object.values(state.roundEliminatedMap))].sort((a, b) => b - a);
+  const last = roundsDesc[0];
+  const secondLast = roundsDesc[1];
+  const thirdLast = roundsDesc[2];
 
   state.finalistsSummary = {
     winner,
-    finalist: finalistRound ? (roundGroups[finalistRound] || []).filter(Boolean)[0] || null : null,
-    semifinalists: semifinalRound ? (roundGroups[semifinalRound] || []).filter(Boolean).slice(0, 2) : [],
-    quarterfinalists: quarterRound ? (roundGroups[quarterRound] || []).filter(Boolean).slice(0, 4) : []
+    finalist: null,
+    semifinalists: last ? Object.entries(state.roundEliminatedMap)
+      .filter(([, round]) => round === last)
+      .map(([trackId]) => findTrackById(trackId))
+      .filter(Boolean) : [],
+    quarterfinalists: secondLast ? Object.entries(state.roundEliminatedMap)
+      .filter(([, round]) => round === secondLast)
+      .map(([trackId]) => findTrackById(trackId))
+      .filter(Boolean) : [],
+    thirdLastRoundTracks: thirdLast ? Object.entries(state.roundEliminatedMap)
+      .filter(([, round]) => round === thirdLast)
+      .map(([trackId]) => findTrackById(trackId))
+      .filter(Boolean) : []
   };
 }
 
@@ -740,22 +764,28 @@ function moveToNextStep() {
   state.currentGroup = nextGroup;
 
   if (isByeMode() && nextGroup.length === 1) {
+    const track = nextGroup[0];
     setStatus("");
     setApp(`
-      <div style="display:grid; grid-template-columns:220px minmax(0,1fr); gap:16px;">
-        <div style="background:#fff; border:1px dashed #cbd5e1; border-radius:16px; padding:12px; text-align:center; font-size:12px; opacity:0.85;">
-          <div style="font-size:11px; font-weight:bold; margin-bottom:8px;">BYE DU TOUR</div>
-          ${nextGroup[0].album?.images?.[0]?.url ? `<img src="${nextGroup[0].album.images[0].url}" alt="${escapeHtml(nextGroup[0].name)}" width="72" style="border-radius:8px;"><br><br>` : ""}
-          <div style="font-weight:bold; margin-bottom:4px;">${escapeHtml(nextGroup[0].name)}</div>
-          <div style="color:#6b7280;">${escapeHtml(getArtistNames(nextGroup[0]))}</div>
+      <div style="display:grid; gap:16px;">
+        <div style="background:#fffef5; border:2px dashed #d1a954; border-radius:18px; padding:20px;">
+          <div style="font-size:13px; font-weight:bold; color:#8a5a00; margin-bottom:12px;">BYE DU TOUR</div>
+          <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
+            ${track.album?.images?.[0]?.url ? `<img src="${track.album.images[0].url}" alt="${escapeHtml(track.name)}" width="90" style="border-radius:10px;">` : ""}
+            <div>
+              <div style="font-size:20px; font-weight:bold; margin-bottom:4px;">${escapeHtml(track.name)}</div>
+              <div style="color:#6b7280;">${escapeHtml(getArtistNames(track))}</div>
+            </div>
+          </div>
         </div>
-        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:24px;">
-          <p style="margin:0; font-size:20px;"><b>${escapeHtml(nextGroup[0].name)}</b> passe automatiquement au tour suivant.</p>
+
+        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:20px;">
+          <p style="margin:0; font-size:18px;"><b>${escapeHtml(track.name)}</b> passe automatiquement au tour suivant.</p>
         </div>
       </div>
     `);
 
-    processBye(nextGroup[0]);
+    processBye(track);
     renderQualifiedList();
 
     state.byeTimeout = setTimeout(() => {
@@ -777,8 +807,8 @@ function renderTrack(track, index = null, options = {}) {
 
   const sizing = {
     tight: { minWidth: 170, maxWidth: 210, img: 120, pad: 10, title: 14, sub: 12, button: 13 },
-    compact: { minWidth: 190, maxWidth: 230, img: 135, pad: 11, title: 15, sub: 12, button: 14 },
-    normal: { minWidth: 220, maxWidth: 260, img: 150, pad: 12, title: 16, sub: 13, button: 14 },
+    compact: { minWidth: 180, maxWidth: 220, img: 125, pad: 10, title: 14, sub: 12, button: 13 },
+    normal: { minWidth: 210, maxWidth: 250, img: 145, pad: 12, title: 16, sub: 13, button: 14 },
     wide: { minWidth: 260, maxWidth: 320, img: 190, pad: 16, title: 18, sub: 14, button: 16 }
   }[compactLevel];
 
@@ -949,13 +979,13 @@ function updateDashboard() {
     $("roundMatchesInfo").textContent = `0 / 0 restants`;
   } else {
     let groupsLeft = 0;
-    let totalGroups = 0;
+    let allGroups = 0;
+
     let i = state.currentGroupStartIndex;
     while (i < state.currentRound.length) {
       const left = state.currentRound.length - i;
 
       if (isByeMode() && left === 1) {
-        totalGroups += 1;
         groupsLeft += 1;
         i += 1;
         continue;
@@ -966,13 +996,11 @@ function updateDashboard() {
         groupSize = left;
       }
 
-      totalGroups += 1;
       groupsLeft += 1;
       i += groupSize;
     }
 
     let j = 0;
-    let allGroups = 0;
     while (j < state.currentRound.length) {
       const left = state.currentRound.length - j;
 
@@ -1014,29 +1042,64 @@ function renderWinnerPath(winner) {
 }
 
 function renderFinalStages() {
-  const { winner, finalist, semifinalists, quarterfinalists } = state.finalistsSummary;
-  if (!winner) return "";
+  const summary = state.finalistsSummary;
+  if (!summary.winner) return "";
+
+  if (state.groupSize === 2) {
+    const { finalist, semifinalists, quarterfinalists } = summary;
+    return `
+      <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:20px; margin-top:16px;">
+        <h2 style="margin-top:0;">Résumé des derniers tours</h2>
+        <div style="display:grid; gap:16px;">
+          <div>
+            <h3 style="margin:0 0 10px; font-size:16px;">Finaliste</h3>
+            ${finalist ? renderMiniTrack(finalist) : `<div style="color:#6b7280;">Aucun finaliste trouvé.</div>`}
+          </div>
+
+          <div>
+            <h3 style="margin:0 0 10px; font-size:16px;">Demi-finalistes</h3>
+            <div style="display:grid; gap:10px;">
+              ${semifinalists.length ? semifinalists.map(track => renderMiniTrack(track)).join("") : `<div style="color:#6b7280;">Aucun demi-finaliste trouvé.</div>`}
+            </div>
+          </div>
+
+          <div>
+            <h3 style="margin:0 0 10px; font-size:16px;">Quarts de finalistes</h3>
+            <div style="display:grid; gap:10px;">
+              ${quarterfinalists.length ? quarterfinalists.map(track => renderMiniTrack(track)).join("") : `<div style="color:#6b7280;">Aucun quart de finaliste trouvé.</div>`}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const lastRoundTracks = summary.semifinalists || [];
+  const secondLastRoundTracks = summary.quarterfinalists || [];
+  const thirdLastRoundTracks = summary.thirdLastRoundTracks || [];
 
   return `
     <div style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:20px; margin-top:16px;">
       <h2 style="margin-top:0;">Résumé des derniers tours</h2>
       <div style="display:grid; gap:16px;">
         <div>
-          <h3 style="margin:0 0 10px; font-size:16px;">Finaliste</h3>
-          ${finalist ? renderMiniTrack(finalist) : `<div style="color:#6b7280;">Aucun finaliste trouvé.</div>`}
-        </div>
-
-        <div>
-          <h3 style="margin:0 0 10px; font-size:16px;">Demi-finalistes</h3>
+          <h3 style="margin:0 0 10px; font-size:16px;">Éliminés au dernier tour</h3>
           <div style="display:grid; gap:10px;">
-            ${semifinalists.length ? semifinalists.map(track => renderMiniTrack(track)).join("") : `<div style="color:#6b7280;">Aucun demi-finaliste trouvé.</div>`}
+            ${lastRoundTracks.length ? lastRoundTracks.map(track => renderMiniTrack(track)).join("") : `<div style="color:#6b7280;">Aucun élément.</div>`}
           </div>
         </div>
 
         <div>
-          <h3 style="margin:0 0 10px; font-size:16px;">Quarts de finalistes</h3>
+          <h3 style="margin:0 0 10px; font-size:16px;">Éliminés à l’avant-dernier tour</h3>
           <div style="display:grid; gap:10px;">
-            ${quarterfinalists.length ? quarterfinalists.map(track => renderMiniTrack(track)).join("") : `<div style="color:#6b7280;">Aucun quart de finaliste trouvé.</div>`}
+            ${secondLastRoundTracks.length ? secondLastRoundTracks.map(track => renderMiniTrack(track)).join("") : `<div style="color:#6b7280;">Aucun élément.</div>`}
+          </div>
+        </div>
+
+        <div>
+          <h3 style="margin:0 0 10px; font-size:16px;">Éliminés au troisième dernier tour</h3>
+          <div style="display:grid; gap:10px;">
+            ${thirdLastRoundTracks.length ? thirdLastRoundTracks.map(track => renderMiniTrack(track)).join("") : `<div style="color:#6b7280;">Aucun élément.</div>`}
           </div>
         </div>
       </div>
