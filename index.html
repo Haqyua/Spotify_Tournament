@@ -553,9 +553,14 @@ function resetTournamentData() {
 function computeRoundByeTrack() {
   state.roundByeTrack = null;
   if (!isByeMode()) return;
+
   const remaining = state.currentRound.length;
   if (remaining > 1 && remaining % 2 === 1) {
-    state.roundByeTrack = state.currentRound[remaining - 1];
+    const byeIndex = Math.floor(Math.random() * remaining);
+    const byeTrack = state.currentRound[byeIndex];
+    state.currentRound.splice(byeIndex, 1);
+    state.currentRound.push(byeTrack);
+    state.roundByeTrack = byeTrack;
   }
 }
 
@@ -1198,6 +1203,24 @@ function getGridColumns(count) {
   if (count === 4) return 4;
   if (count === 3) return 3;
   return 2;
+}
+
+function renderPersistentBye() {
+  if (!state.roundByeTrack) return "";
+  const track = state.roundByeTrack;
+
+  return `
+    <div style="background:#fffef5; border:2px dashed #d1a954; border-radius:18px; padding:14px;">
+      <div style="font-size:12px; font-weight:bold; color:#8a5a00; margin-bottom:10px;">BYE DU TOUR</div>
+      <div style="display:flex; gap:12px; align-items:center;">
+        ${track.album?.images?.[0]?.url ? `<img src="${track.album.images[0].url}" alt="${escapeHtml(track.name)}" width="60" height="60" style="border-radius:8px; object-fit:cover;">` : ""}
+        <div style="min-width:0;">
+          <div style="font-weight:bold;">${escapeHtml(track.name)}</div>
+          <div style="font-size:12px; color:#6b7280;">${escapeHtml(getArtistNames(track))}</div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function renderGroupSelection() {
